@@ -13,5 +13,5 @@ echo "###############"
 ps -ef | grep ^openxpki
 echo "Sleeping before enabling key group"
 sleep 2
-/etc/openxpki/local/etc/keygroup.pl
+/etc/openxpki/local/sbin/keygroup.pl
 echo "done."
