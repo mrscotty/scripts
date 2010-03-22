@@ -1,0 +1,408 @@
+#!/usr/bin/env perl
+#
+# 2010-02-18 Martin Bartosch <m.bartosch@cynops.de>
+#
+# Module synchronizer.
+#
+
+use strict;
+use warnings;
+
+use File::Temp qw( tempfile tempdir );
+use Template;
+use Config::Std;
+use Data::Dumper;
+use Getopt::Long;
+
+my $config_file_name = $ENV{HOME} . '/.synctree';
+my %config_file;
+my %config_opt;
+
+my $dryrun  = 0;
+my $verbose = 0;
+
+GetOptions(
+    "dryrun|dry-run|simulate" => \$dryrun,
+    "verbose"                 => \$verbose,
+);
+
+my $rsyncopts = $dryrun ? '--dry-run' : '';
+
+# read config file if present
+if ( -r $config_file_name ) {
+    read_config $config_file_name => %config_file;
+}
+
+# parse command line options (format: key=value ...)
+while ( my $arg = shift ) {
+    my ( $keyword, $value ) = ( $arg =~ m{ \A (.*?) = (.*) \z }xms );
+    if ( defined $value ) {
+        $config_opt{$keyword} = $value;
+    }
+}
+
+=head1 CONFIGURING TARGETS
+
+The C<%targets> hash contains a list of the target trees to be syncronized.
+Currently, the only named-parameter entry is I<targets>, which is an anonymous
+array that contains one anonymous hash per target. The basic data structure
+looks like this:
+
+  my %targets = (
+    targets => [
+      # see description of the named-parameters below
+      { ... },
+      { ... },
+    ],
+  );
+
+Each target is an anonymous array with the following named-parameters
+
+=head2 name
+
+The name of the target is merely an identifier used in verbose output to
+assist the user in determining which target is active.
+
+  name => 'mods for project XY',
+
+=head2 keywords
+
+These are custom definitions of keywords that may be used as Template::Toolkit
+replacements in some of the settings. This is an anonymous hash with the key
+as the keyword and the value containing the text to be substitued.
+
+Arbitrary replacements may be set here. Scalars are directly replaced. If
+a code ref is specified, the return value of the referenced subroutine is
+replaced. Execution of the code ref happens only once.
+
+  keywords => {
+    hostname => 'test-vm-2',
+    reference_commit => sub {
+      return $config_opt{reference_commit}
+      || $config_file{debian1}->{reference_commit};
+    },
+  },
+
+=head2 condition
+
+If condition is specified, the literal string is executed in a shell. If the 
+return value is true, the definitions for this target will be executed. The
+I<condition> value is subject to Template expansion with the entries from 
+I<keywords>.
+
+  condition => q{git branch | grep '^*' | grep work},
+
+Multiple conditions may be specified by using an anonymous array. In this case,
+all conditions must return C<true> for the definitions for this target to be
+executed. B<Note:> the Template expansion is not currently supported when an
+anonymous array has been specified.
+
+  condition => [
+    q(git config --get svn-remote.svn.url)
+      . q(| grep -q 'https://openxpki.svn.sourceforge.net/svnroot/openxpki'),
+    q(git symbolic-ref HEAD 2>/dev/null)
+      . q(| awk -F/ '{print $3}'|grep -q unblock),
+  ],
+
+=head2 list_command
+
+This contains the shell command to be executed to produce the list of files
+to syncronize.
+The value is subject to Template expansions with entries from I<keywords>.
+
+  list_command => q{git diff --name-only [% reference_commit %]},
+
+=head2 modules
+
+This is a list of individual modules to be syncronized. It is processed
+sequentially. This allows for various sub-trees to be picked out of a
+development directory tree and syncronized to different destinations. 
+A list of anonymous hashes is specified, with each entry a named-parameter
+list with the following key-value pairs:
+
+=over 8
+
+=item path
+
+This is the local path to syncronize. All version controlled files below
+this directory are synchronized if added or modified in relation to the
+reference commit. This directory is expected to be part of the repository.
+The value is subject to Template expansions with entries from I<keywords>.
+
+=item dest
+
+This is the target destination directory. Files below I<path> will be
+syncronized below this directory.
+The value is subject to Template expansions with entries from I<keywords>.
+
+B<Note:> All files below this directory will be handled by this script.
+Potentially all files may be deleted by this script during the sync 
+process (exception: see I<exclude>).
+
+=item exclude
+
+This is a list of files below I<path> that should not be syncronized to
+the target. Corresponding files below the target will be left untouched.
+
+=item include_untracked
+
+This is a list of files below I<path> in the local directory that should
+be syncronized to the target although they are not tracked in the version
+control.
+
+=item sync_policy
+
+Specifies the syncronization behaviour. For the value I<full>, a full 
+syncronization for this module is performed. In this case, the target
+is first deleted before syncronizing. This ensures that deleted files
+(e.g.: when switching branches) get syncronized as well. For the value
+I<lazy>, only added or modified files are published, resulting in a faster
+operation, but no replication of deletions.
+
+
+  modules => [
+    {
+      path => 'trunk/clients/perl/OpenXPKI-Client-HTML-Mason/htdocs',
+      dest => 'root@[% hostname %]:/etc/openxpki/local2/htdocs',
+      exclude => [
+        'config.xml', 'database.xml',
+        'auth.xml',   'userca/auth.xml',
+        'serverca/auth.xml',
+      ],
+      include_untracked => [
+        'test-script.sh',
+      ],
+      sync_policy => 'lazy',
+    },
+  ],
+
+For a complete example of the templates declaration in action, see the
+source code.
+
+=cut
+
+my %targets = (
+    targets => [    # list of environments to synchronize
+        {           # one anonymous array per target
+            name     => 'local unblock',
+            keywords => {
+                hostname         => 'vm2',
+                reference_commit => sub {
+                    return $config_opt{reference_commit}
+                      || $config_file{debian1}->{reference_commit};
+                },
+            },
+            condition => [
+                q(git config --get svn-remote.svn.url) . q( | )
+                  . q(grep -q 'https://shardin@openxpki.svn.sourceforge.net/svnroot/openxpki'),
+                q(git symbolic-ref HEAD 2>/dev/null)
+                  . q(| awk -F/ '{print $3}'|grep -q unblock),
+            ],
+            list_command => q{git diff --name-only [% reference_commit %]},
+            modules      => [
+                {
+                    path =>
+                      'trunk/clients/perl/OpenXPKI-Client-HTML-Mason/htdocs',
+                       dest => 'root@[% hostname %]:/etc/openxpki/local/htdocs',
+#                    dest    => '/tmp/vm2/htdocs',
+                    exclude => [],
+
+#                    include_untracked => [
+#
+#                        # diffs betwee 1488 and 1513
+#                        qw(
+#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/authentication/session.mhtml
+#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/authentication/autohandler
+#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/service/api/cert_list.html
+#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/service/index.html
+#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/service/workflow/show_pending_requests.html
+#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/autohandler
+#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/css/sinorcaish-screen.css
+#                            clients/perl/OpenXPKI-Client-HTML-Mason/lib/OpenXPKI/Client/HTML/Mason/ApacheHandler.pm
+#                            clients/perl/OpenXPKI-Client-HTML-Mason/eg/openxpki-mason-mod_perl.conf
+#                            )
+#                    ],
+
+                    sync_policy => 'lazy',
+                },
+
+                {
+                    path => 'trunk/perl-modules/core/trunk/',
+
+                       dest => 'root@[% hostname %]:/etc/openxpki/local/lib/',
+                    sync_policy => 'lazy',
+                },
+                {
+                    path        => 'local/instances/',
+                       dest => 'root@[% hostname %]:/etc/openxpki/local/instances/',
+                    sync_policy => 'lazy',
+                },
+                {
+                    path        => 'local/etc/',
+                       dest => 'root@[% hostname %]:/etc/openxpki/local/etc/',
+                    sync_policy => 'lazy',
+                },
+            ],    # modules
+        },    # 'local unblock' target
+        {
+            name     => 'My Tools',
+            keywords => {
+                hostname         => 'vm2',
+                reference_commit => '3d82f69cdbbae7e5c8b4019e6af6c8411afdbb20',
+            },
+            condition => [
+                q(test -f README && grep -q "SCOTT'S OPENXPKI TOOLS" README),
+                q(git symbolic-ref HEAD 2>/dev/null)
+                  . q(| awk -F/ '{print $3}'|grep -q master),
+            ],
+            list_command => q{git diff --name-only [% reference_commit %]},
+            modules      => [
+                {
+                    path => 'sbin/',
+                     dest => 'root@[% hostname %]:/etc/openxpki/local/sbin/',
+#                    dest        => '/tmp/vm2/sbin',
+                    sync_policy => 'lazy',
+                },
+            ],    # modules
+        },      # 'My Tools' target
+    ],            # targets => [ ... ]
+);                # %targets = [ ... ]
+
+# pre-process target definitions: expand keywords
+foreach my $target ( @{ $targets{targets} } ) {
+      foreach my $keyword ( keys %{ $target->{keywords} } ) {
+          if ( ref $target->{keywords}->{$keyword} eq 'CODE' ) {
+              $target->{keywords}->{$keyword} =
+                $target->{keywords}->{$keyword}();
+          }
+      }
+}
+
+# pre-process target definitions: expand templates
+my $tt = Template->new();
+foreach my $target ( @{ $targets{targets} } ) {
+
+      foreach my $entry (qw( condition list_command )) {
+          my $template = $target->{$entry};
+          if ( ref($template) eq 'ARRAY' ) {
+              warn "Warning: condition arrays do not support templates"
+                if $verbose;
+              next;
+          }
+          my $output;
+          $tt->process( \$template, $target->{keywords}, \$output );
+          $target->{$entry} = $output;
+      }
+
+      foreach my $module ( @{ $target->{modules} } ) {
+          foreach my $entry (qw( path dest )) {
+              my $template = $module->{$entry};
+              my $output;
+              $tt->process( \$template, $target->{keywords}, \$output );
+              $module->{$entry} = $output;
+          }
+      }
+}
+
+# print Dumper \%targets; die;
+
+sub handle_file {
+      my $target = shift;
+      my $file   = shift;
+
+      foreach my $module ( @{ $target->{modules} } ) {
+          my $path = $module->{path};
+          my $dest = $module->{dest};
+
+          print "# handle_file: file=$file, path=$path\n"
+            if $verbose;
+          if ( defined $path && ( index( $file, $path ) == 0 ) ) {
+              my $source = $path;
+              my $item   = $file;
+              $item =~ s{ \A $path }{}xms;
+
+              print "# Adding '$item' to include list\n"
+                if $verbose;
+              push @{ $module->{include} }, $item;
+          }
+      }
+}
+
+TARGET: foreach my $target ( @{ $targets{targets} } ) {
+      if ( defined $target->{condition} ) {
+          my $condition = $target->{condition};
+          foreach my $c (
+              ref($condition) eq 'ARRAY'
+              ? @{$condition}
+              : $condition
+            )
+          {
+              print "# Checking condition: '$c'\n" if $verbose;
+              if ( system($c) != 0 ) {
+                  next TARGET;
+              }
+          }
+      }
+      else {
+          print "# No condition set\n" if $verbose;
+      }
+
+      if ($verbose) {
+          print "# Running target ", ( $target->{name} || '' ), "\n";
+      }
+      my $list_command = $target->{list_command};
+
+      print "# List command: $list_command\n" if $verbose;
+
+      # get a list of all changed or added files
+      open my $handle, $list_command . " |"
+        || die "Could not run VC list operation ($list_command). Stopped";
+      my @includes;
+      while ( my $file = <$handle> ) {
+          chomp $file;
+          handle_file( $target, $file );
+      }
+      close $handle;
+
+      # compose a list of files to exclude
+      foreach my $module ( @{ $target->{modules} } ) {
+          my $path = $module->{path};
+          my $dest = $module->{dest};
+
+          my ( $exclude_fh, $exclude_filename ) = tempfile();
+          foreach my $entry ( @{ $module->{exclude} } ) {
+              print $exclude_fh "- /$entry\n";
+          }
+          $exclude_fh->close();
+
+          my ( $include_fh, $include_filename ) = tempfile();
+          foreach my $entry ( @{ $module->{include} } ) {
+              print $include_fh "+ /$entry\n";
+          }
+          $include_fh->close();
+
+          my $sync_policy = $module->{sync_policy};
+          if ( $sync_policy eq 'full' ) {
+
+# step 1: clean up target area (delete anything not having an exclude rule)
+# replicate empty directory to target, but exclude the protected files (i. e. delete everything except excluded files)
+              my $emptydir = tempdir( CLEANUP => 1 );
+              print "# Cleaning up target '$dest'\n" if $verbose;
+              system
+"rsync -az $rsyncopts --filter 'merge $exclude_filename' --delete $emptydir/ $dest";
+          }
+          elsif ( $sync_policy ne 'lazy' ) {
+              die "Invalid sync policy '$sync_policy'. Stopped";
+          }
+
+      # step 2: synchronize all additional/modified files relative to checkpoint
+
+          print "# Syncronizing '$path' to '$dest'\n" if $verbose;
+          system
+"rsync -avz $rsyncopts --filter 'merge $exclude_filename' --filter 'merge $include_filename' --filter '+ */' --filter '- *' --delete $path $dest";
+
+          unlink $exclude_filename;
+          unlink $include_filename;
+      }
+}
+
