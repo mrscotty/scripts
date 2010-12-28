@@ -2,12 +2,13 @@
 
 openxpkictl stop
 >/var/openxpki/stderr.log
-#  --debug '.*LDAP.*:128' \
+>/var/openxpki/openxpki.log
 #  --debug '.*WorkflowCondition.*:128' \
 #  --debug '.*Notification.*:128' \
 #  --debug '.*Dispatcher.*:128' \
+#  --debug '.*Datapool.*:128' \
 openxpkictl \
-  --debug '.*GetLDAPData.*:128' \
+  --debug '.*CardAdm.*:64' \
   start
 echo "###############"
 ps -ef | grep ^openxpki
