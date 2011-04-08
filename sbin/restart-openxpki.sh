@@ -10,24 +10,17 @@
 
 dir=`dirname $0`
 
-sudo openxpki openxpkictl stop
+sudo /etc/init.d/openxpki stop
 
-sudo openxpki ${dir}/truncfile \
+sudo ${dir}/truncfile \
     /var/openxpki/stderr.log \
     /var/openxpki/openxpki.log
 
-#  --debug '.*WorkflowCondition.*:128' \
-#  --debug '.*Notification.*:128' \
-#  --debug '.*Dispatcher.*:128' \
-#  --debug '.*Datapool.*:128' \
-sudo openxpki openxpkictl \
-  --debug '.*CardAdm.*:64' \
-  --debug '.*FetchPUK.*:64' \
-  --debug '.*Default.*:64' \
-  start
+sudo /etc/init.d/openxpki start
+
 echo "###############"
 ps -ef | grep ^openxpki
 echo "Sleeping before enabling key group"
 sleep 2
-${dir}/keygroup.pl
+sudo -u openxpki perl -I/usr/local/lib/perl5/site_perl ${dir}/keygroup.pl
 echo "done."
