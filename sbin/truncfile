@@ -1,0 +1,29 @@
+#!/usr/bin/perl 
+#
+# truncfile - simply truncates the contents of the given file
+#
+# This is basically the same as running ">filename" at the shell prompt,
+# but with the subtle advantage that it can be run by sudo and more than
+# one file may be specified.
+#
+# usage:
+#
+#   sudo ./truncfile FILE_1 [...]
+#
+
+use strict;
+use warnings;
+
+my $rc = 0;
+
+foreach my $file (@ARGV) {
+    if ( open( F, ">$file" ) ) {
+        close F;    # just close it
+    } else {
+        $rc++;
+        warn "Error truncating $file: $!\n";
+    }
+}
+
+exit $rc;
+
