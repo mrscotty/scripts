@@ -42,36 +42,36 @@ print "# Repackage and install", "\n";
 print "############################################################", "\n";
 
 
-system("cd $code/trunk/package/suse && make public")
-    or die "ERROR running 'make public' in $code/trunk/packages/suse: $!";
+system("cd $code/trunk/package/suse && make public") == 0
+    or die "ERROR running 'make public' in $code/trunk/packages/suse: $?";
 
-system('sudo', 'rpm', '-e', $target, @coderpms) 
-    or die "ERROR removing previous RPMs: $!";
+system('sudo', 'rpm', '-e', $target, @coderpms)  == 0
+    or die "ERROR removing previous RPMs: $?";
 
-system('sudo', 'rpm', '-ivh', $code . '/trunk/package/suse/*x86_64.rpm')
-    or die "Error installing RPMs: $!";
+system('sudo', 'rpm', '-ivh', $code . '/trunk/package/suse/*x86_64.rpm') == 0
+    or die "Error installing RPMs: $?";
 
-system("cd $config && make config TARGET=$target")
-    or die "Error running 'make config TARGET=$target' in '$config': $!";
+system("cd $config && make config TARGET=$target") == 0
+    or die "Error running 'make config TARGET=$target' in '$config': $?";
 
-system('sudo', 'rpm', '-ivh', '--force', '/usr/src/packages/RPMS/x86_64/' . ${target} . '-*x86_64.rpm')
-    or die "Error installing config RPM: $!";
+system('sudo', 'rpm', '-ivh', '--force', '/usr/src/packages/RPMS/x86_64/' . ${target} . '-*x86_64.rpm') == 0
+    or die "Error installing config RPM: $?";
 
-system($tools . '/bin/patch-dca05.sh')
-    or die "Error patching for dca05: $!";
+system($tools . '/bin/patch-dca05.sh') == 0
+    or die "Error patching for dca05: $?";
 
 print "############################################################", "\n";
 print "# Start OpenXPKI", "\n";
 print "############################################################", "\n";
 
-system ( qw(sudo /etc/init.d/openxpki start) )
-    or die "Failed to start openxpki";
+system ( qw(sudo /etc/init.d/openxpki start) ) == 0
+    or die "Failed to start openxpki: $?";
 
 print "###############", "\n";
 system("ps -ef | grep ^openxpki");
 print "Sleeping before enabling key group", "\n";
 sleep 2;
-system( qw(sudo -u openxpki perl -I/usr/local/lib/perl5/site_perl ), $tools . '/sbin/keygroup.pl')
-    or die "Error starting openxpki: $!";
+system( qw(sudo -u openxpki perl -I/usr/local/lib/perl5/site_perl ), $tools . '/sbin/keygroup.pl') == 0
+    or die "Error starting openxpki: $?";
 
 print "done.", "\n";
