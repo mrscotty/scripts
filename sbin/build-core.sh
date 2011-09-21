@@ -2,7 +2,7 @@
 #
 # build-core.sh - Build libopenxpki-perl package on debian
 
-function die {
+die {
     echo "$@" >&2
     exit 1
 }
