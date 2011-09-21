@@ -18,7 +18,9 @@ cd ~/openxpki || die "Error cd'ing to ~/openxpki"
 git pull
 cd ~/openxpki/trunk/package/debian || die "Error cd'ing to ~/openxpki/trunk/package/debian"
 
-rm -f ~/openxpki/dpkg/${dist}/binary/core/*.deb
+rm -f ~/openxpki/dpkg/${dist}/binary/core/*.deb deb/core/*.deb
+
+make core
 
 cp deb/core/*.deb ~/openxpki/dpkg/${dist}/binary/core/
 
