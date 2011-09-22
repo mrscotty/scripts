@@ -7,7 +7,7 @@ function die {
     exit 1
 }
 
-pkg=shift
+pkg="$1"
 
 if [ -n "$pkg" ]; then
     die "No package specified. try 'core' or 'deployment'"
