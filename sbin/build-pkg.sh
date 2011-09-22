@@ -9,7 +9,7 @@ function die {
 
 pkg="$1"
 
-if [ -n "$pkg" ]; then
+if [ -z "$pkg" ]; then
     die "No package specified. try 'core' or 'deployment'"
 fi
 
