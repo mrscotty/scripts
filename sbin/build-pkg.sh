@@ -13,8 +13,6 @@ if [ -z "$pkg" ]; then
     die "No package specified. try 'core' or 'deployment'"
 fi
 
-die "whoa there, cowboy!"
-
 if [ -f /etc/lsb-release ]; then
     . /etc/lsb-release
     dist="$DISTRIB_CODENAME"
