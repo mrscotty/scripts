@@ -24,11 +24,15 @@ cd ~/openxpki || die "Error cd'ing to ~/openxpki"
 git pull
 cd ~/openxpki/trunk/package/debian || die "Error cd'ing to ~/openxpki/trunk/package/debian"
 
-rm -f ~/openxpki/dpkg/${dist}/binary/${pkg}/*.deb deb/${pkg}/*.deb
+for i in core client; do
+    rm -f ~/openxpki/dpkg/${dist}/binary/${i}/*.deb deb/${i}/*.deb
+done
 
 make $pkg
 
-cp deb/${pkg}/*.deb ~/openxpki/dpkg/${dist}/binary/${pkg}/
+for i in core client; do
+    cp deb/${i}/*.deb ~/openxpki/dpkg/${dist}/binary/${i}/
+done
 
 (cd ~/openxpki/dpkg && \
         (dpkg-scanpackages ${dist}/binary /dev/null | \
