@@ -7,6 +7,12 @@ function die {
     exit 1
 }
 
+pkg=shift
+
+if [ -z "$pkg" ]; then
+    die "No package specified. try 'core' or 'deployment'"
+fi
+
 if [ -f /etc/lsb-release ]; then
     . /etc/lsb-release
     dist="$DISTRIB_CODENAME"
@@ -18,11 +24,11 @@ cd ~/openxpki || die "Error cd'ing to ~/openxpki"
 git pull
 cd ~/openxpki/trunk/package/debian || die "Error cd'ing to ~/openxpki/trunk/package/debian"
 
-rm -f ~/openxpki/dpkg/${dist}/binary/core/*.deb deb/core/*.deb
+rm -f ~/openxpki/dpkg/${dist}/binary/${pkg}/*.deb deb/${pkg}/*.deb
 
-make core
+make $pkg
 
-cp deb/core/*.deb ~/openxpki/dpkg/${dist}/binary/core/
+cp deb/${pkg}/*.deb ~/openxpki/dpkg/${dist}/binary/${pkg}/
 
 (cd ~/openxpki/dpkg && \
         (dpkg-scanpackages ${dist}/binary /dev/null | \
