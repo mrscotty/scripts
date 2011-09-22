@@ -9,9 +9,11 @@ function die {
 
 pkg=shift
 
-if [ -z "$pkg" ]; then
+if [ -n "$pkg" ]; then
     die "No package specified. try 'core' or 'deployment'"
 fi
+
+die "whoa there, cowboy!"
 
 if [ -f /etc/lsb-release ]; then
     . /etc/lsb-release
