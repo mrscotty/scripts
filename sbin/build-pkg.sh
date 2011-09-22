@@ -24,9 +24,9 @@ cd ~/openxpki || die "Error cd'ing to ~/openxpki"
 git pull
 cd ~/openxpki/trunk/package/debian || die "Error cd'ing to ~/openxpki/trunk/package/debian"
 
-for i in core client; do
-    rm -f ~/openxpki/dpkg/${dist}/binary/${i}/*.deb deb/${i}/*.deb
-done
+#for i in core client; do
+#    rm -f ~/openxpki/dpkg/${dist}/binary/${i}/*.deb deb/${i}/*.deb
+#done
 
 make $pkg
 
