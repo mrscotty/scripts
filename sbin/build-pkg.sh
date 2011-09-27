@@ -33,9 +33,15 @@ for i in $pkg; do
     make $i
 done
 
-for i in $i; do
-    cp deb/${i}/*.deb ~/openxpki/dpkg/${dist}/binary/${i}/
-done
+mkdir -p ~/openxpki/dpkg/${dist}/binary/cpan
+mkdir -p ~/openxpki/dpkg/${dist}/binary/core
+mkdir -p ~/openxpki/dpkg/${dist}/binary/client
+mkdir -p ~/openxpki/dpkg/${dist}/binary/client_api
+
+cp deb/cpan/*.deb ~/openxpki/dpkg/${dist}/binary/cpan/
+cp deb/core/*.deb ~/openxpki/dpkg/${dist}/binary/core/
+cp deb/client_api/*.deb ~/openxpki/dpkg/${dist}/binary/client_api/
+cp deb/client/*.deb ~/openxpki/dpkg/${dist}/binary/client/
 
 (cd ~/openxpki/dpkg && \
         (dpkg-scanpackages ${dist}/binary /dev/null | \
