@@ -7,10 +7,11 @@ function die {
     exit 1
 }
 
-pkg="$1"
+pkg="$@"
 
 if [ -z "$pkg" ]; then
-    die "No package specified. try 'core' or 'deployment'"
+    echo "No package specified. Defaulting to core, perl-client-api, deployment"
+    pkg="core perl-client-api deployment"
 fi
 
 if [ -f /etc/lsb-release ]; then
@@ -28,9 +29,11 @@ cd ~/openxpki/trunk/package/debian || die "Error cd'ing to ~/openxpki/trunk/pack
 #    rm -f ~/openxpki/dpkg/${dist}/binary/${i}/*.deb deb/${i}/*.deb
 #done
 
-make $pkg
+for i in $pkg; do
+    make $i
+done
 
-for i in core client; do
+for i in $i; do
     cp deb/${i}/*.deb ~/openxpki/dpkg/${dist}/binary/${i}/
 done
 
