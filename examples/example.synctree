@@ -1,0 +1,18 @@
+[default]
+reference_commit: master
+hostname: test1
+user: root
+modules: perllib masonhtdocs
+
+[perllib]
+path: trunk/perl-modules/core/trunk/
+dest: /etc/openxpki/local/lib/
+sync_policy: lazy
+
+[masonhtdocs]
+path: trunk/clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/
+dest: /etc/openxpki/local/htdocs/
+sync_policy: lazy
+
+
+

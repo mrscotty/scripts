@@ -20,17 +20,53 @@ my %config_opt;
 
 my $dryrun  = 0;
 my $verbose = 0;
+my $debug   = 0;
+
+my $rsync = '/opt/local/bin/rsync';
+
+foreach my $ff (qw{ .synctree }) {
+    if ( -f $ff ) {
+        warn "Reading config from $ff\n";
+        $config_file_name = $ff;
+    }
+}
 
 GetOptions(
     "dryrun|dry-run|simulate" => \$dryrun,
     "verbose"                 => \$verbose,
+    "debug"                   => \$debug,
 );
 
-my $rsyncopts = $dryrun ? '--dry-run' : '';
+my $deftarget;
+
+if (@ARGV) {
+    $deftarget = shift;
+}
+
+my @rsyncopts = ();
+if ($dryrun) {
+    push @rsyncopts, '--dry-run';
+}
+if ($verbose) {
+    push @rsyncopts, '-v';
+}
+else {
+    push @rsyncopts, '--itemize-changes';
+    push @rsyncopts, '--no-implied-dirs';
+}
+
+my $rsyncopts = join( ' ', @rsyncopts );
 
 # read config file if present
 if ( -r $config_file_name ) {
     read_config $config_file_name => %config_file;
+}
+
+# change to toplevel directory
+my $topdir = `git rev-parse --show-toplevel`;
+chomp $topdir;
+if ( not chdir($topdir) ) {
+    die "Error changing to directory $topdir: $!";
 }
 
 # parse command line options (format: key=value ...)
@@ -181,228 +217,258 @@ source code.
 
 =cut
 
+my @default_modules = ();
+
+# Create a list of default modules
+if ( $config_file{'default'}->{'modules'} ) {
+    foreach
+      my $mod ( split( /\s+/, $config_file{'default'}->{'modules'} ) )
+    {
+        if ( $config_file{$mod} ) {
+            my %params = ();
+            foreach my $key (qw( user hostname )) {
+                if ( defined $config_file{$mod}->{$key} ) {
+                    $params{$key} = $config_file{$mod}->{$key};
+                }
+                elsif ( defined $config_file{'default'}->{$key} ) {
+                    $params{$key} = $config_file{'default'}->{$key};
+                }
+                elsif ( defined $config_opt{$key} ) {
+                    $params{$key} = $config_opt{$key};
+                }
+                else {
+                    $params{$key} = '';
+                }
+            }
+
+            my $dest;
+            if ( $params{user} ) {
+                $dest = $params{user} . '@';
+            }
+            if ( $params{hostname} ) {
+                $dest .= $params{hostname} . ':';
+            }
+
+            my $data = {};
+            $data->{path} = $config_file{$mod}->{'path'};
+            $data->{dest} = $dest . $config_file{$mod}->{'dest'};
+            if ( ref( $config_file{$mod}->{exclude} ) eq 'ARRAY' ) {
+                $data->{exclude} =
+                  [ split( /\s+/, @{ $config_file{$mod}->{exclude} } ) ];
+            }
+            if ( defined( $config_file{$mod}->{sync_policy} ) ) {
+                $data->{sync_policy} = $config_file{$mod}->{sync_policy};
+            }
+
+            push @default_modules, $data;
+        } else {
+            die "ERROR: No section for module '$mod' found.\n";
+        }
+    }
+}
+
 my %targets = (
     targets => [    # list of environments to synchronize
-        {           # one anonymous array per target
-            name     => 'local unblock',
+        {
+            name     => 'default',
             keywords => {
-                hostname         => 'vm2',
+                hostname         => $config_file{'default'}->{hostname},
                 reference_commit => sub {
                     return $config_opt{reference_commit}
-                      || $config_file{debian1}->{reference_commit};
+                      || $config_file{'default'}->{reference_commit};
                 },
             },
-            condition => [
-                q(git config --get svn-remote.svn.url) . q( | )
-                  . q(grep -q 'https://shardin@openxpki.svn.sourceforge.net/svnroot/openxpki'),
-                q(git symbolic-ref HEAD 2>/dev/null)
-                  . q(| awk -F/ '{print $3}'|grep -q unblock),
-            ],
             list_command => q{git diff --name-only [% reference_commit %]},
-            modules      => [
-                {
-                    path =>
-                      'trunk/clients/perl/OpenXPKI-Client-HTML-Mason/htdocs',
-                       dest => 'root@[% hostname %]:/etc/openxpki/local/htdocs',
-#                    dest    => '/tmp/vm2/htdocs',
-                    exclude => [],
-
-#                    include_untracked => [
-#
-#                        # diffs betwee 1488 and 1513
-#                        qw(
-#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/authentication/session.mhtml
-#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/authentication/autohandler
-#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/service/api/cert_list.html
-#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/service/index.html
-#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/service/workflow/show_pending_requests.html
-#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/autohandler
-#                            clients/perl/OpenXPKI-Client-HTML-Mason/htdocs/css/sinorcaish-screen.css
-#                            clients/perl/OpenXPKI-Client-HTML-Mason/lib/OpenXPKI/Client/HTML/Mason/ApacheHandler.pm
-#                            clients/perl/OpenXPKI-Client-HTML-Mason/eg/openxpki-mason-mod_perl.conf
-#                            )
-#                    ],
-
-                    sync_policy => 'lazy',
-                },
-
-                {
-                    path => 'trunk/perl-modules/core/trunk/',
-
-                       dest => 'root@[% hostname %]:/etc/openxpki/local/lib/',
-                    sync_policy => 'lazy',
-                },
-                {
-                    path        => 'local/instances/',
-                       dest => 'root@[% hostname %]:/etc/openxpki/local/instances/',
-                    sync_policy => 'lazy',
-                },
-                {
-                    path        => 'local/etc/',
-                       dest => 'root@[% hostname %]:/etc/openxpki/local/etc/',
-                    sync_policy => 'lazy',
-                },
-            ],    # modules
-        },    # 'local unblock' target
+            modules      => [@default_modules],
+            condition   => sub { return -f '.synctree'; },
+        },
         {
-            name     => 'My Tools',
-            keywords => {
-                hostname         => 'vm2',
-                reference_commit => '3d82f69cdbbae7e5c8b4019e6af6c8411afdbb20',
+        name     => 'My Tools',
+        keywords => {
+            hostname         => 'vm2',
+            reference_commit => sub {
+                return $config_opt{reference_commit}
+                  || $config_file{'My Tools'}->{reference_commit};
             },
-            condition => [
-                q(test -f README && grep -q "SCOTT'S OPENXPKI TOOLS" README),
-                q(git symbolic-ref HEAD 2>/dev/null)
-                  . q(| awk -F/ '{print $3}'|grep -q master),
-            ],
-            list_command => q{git diff --name-only [% reference_commit %]},
-            modules      => [
-                {
-                    path => 'sbin/',
-                     dest => 'root@[% hostname %]:/etc/openxpki/local/sbin/',
-#                    dest        => '/tmp/vm2/sbin',
-                    sync_policy => 'lazy',
-                },
-            ],    # modules
-        },      # 'My Tools' target
-    ],            # targets => [ ... ]
-);                # %targets = [ ... ]
+        },
+        condition => [
+            q(test -f README && grep -q "SCOTT'S OPENXPKI TOOLS" README),
+            q(git symbolic-ref HEAD 2>/dev/null)
+              . q(| awk -F/ '{print $3}'|grep -q master),
+        ],
+        list_command => q{git diff --name-only [% reference_commit %]},
+        modules      => [
+            {
+                path => 'sbin/',
+                dest => 'root@[% hostname %]:/etc/openxpki/sbin/',
+
+                #                    dest        => '/tmp/vm2/sbin',
+                sync_policy => 'lazy',
+            },
+        ],    # modules
+    },
+    ]
+);
 
 # pre-process target definitions: expand keywords
+warn "pre-process target definitions (expand keywords)...\n";
 foreach my $target ( @{ $targets{targets} } ) {
-      foreach my $keyword ( keys %{ $target->{keywords} } ) {
-          if ( ref $target->{keywords}->{$keyword} eq 'CODE' ) {
-              $target->{keywords}->{$keyword} =
-                $target->{keywords}->{$keyword}();
-          }
-      }
+    if ( defined $deftarget and $target->{name} ne $deftarget ) {
+        next;
+    }
+    foreach my $keyword ( keys %{ $target->{keywords} } ) {
+        if ( ref $target->{keywords}->{$keyword} eq 'CODE' ) {
+            $target->{keywords}->{$keyword} = $target->{keywords}->{$keyword}();
+        }
+    }
 }
 
 # pre-process target definitions: expand templates
 my $tt = Template->new();
+warn "pre-process target definitions (expand templates)...\n";
 foreach my $target ( @{ $targets{targets} } ) {
+    if ( defined $deftarget and $target->{name} ne $deftarget ) {
+        next;
+    }
 
-      foreach my $entry (qw( condition list_command )) {
-          my $template = $target->{$entry};
-          if ( ref($template) eq 'ARRAY' ) {
-              warn "Warning: condition arrays do not support templates"
-                if $verbose;
-              next;
-          }
-          my $output;
-          $tt->process( \$template, $target->{keywords}, \$output );
-          $target->{$entry} = $output;
-      }
+    foreach my $entry (qw( condition list_command )) {
+        my $template = $target->{$entry};
+        if ( ref($template) eq 'ARRAY' or ref($template) eq 'CODE' ) {
+            warn "Warning: condition arrays/code do not support templates"
+              if $debug;
+            next;
+        }
+        my $output;
+        $tt->process( \$template, $target->{keywords}, \$output );
+        $target->{$entry} = $output;
+    }
 
-      foreach my $module ( @{ $target->{modules} } ) {
-          foreach my $entry (qw( path dest )) {
-              my $template = $module->{$entry};
-              my $output;
-              $tt->process( \$template, $target->{keywords}, \$output );
-              $module->{$entry} = $output;
-          }
-      }
+    foreach my $module ( @{ $target->{modules} } ) {
+        foreach my $entry (qw( path dest )) {
+            my $template = $module->{$entry};
+            my $output;
+            $tt->process( \$template, $target->{keywords}, \$output );
+            $module->{$entry} = $output;
+        }
+    }
 }
 
 # print Dumper \%targets; die;
 
 sub handle_file {
-      my $target = shift;
-      my $file   = shift;
+    my $target = shift;
+    my $file   = shift;
 
-      foreach my $module ( @{ $target->{modules} } ) {
-          my $path = $module->{path};
-          my $dest = $module->{dest};
+    foreach my $module ( @{ $target->{modules} } ) {
+        my $path = $module->{path};
+        my $dest = $module->{dest};
 
-          print "# handle_file: file=$file, path=$path\n"
-            if $verbose;
-          if ( defined $path && ( index( $file, $path ) == 0 ) ) {
-              my $source = $path;
-              my $item   = $file;
-              $item =~ s{ \A $path }{}xms;
+        print "# handle_file: file=$file, path=$path\n"
+          if $debug;
+        if ( defined $path && ( index( $file, $path ) == 0 ) ) {
+            my $source = $path;
+            my $item   = $file;
+            $item =~ s{ \A $path }{}xms;
 
-              print "# Adding '$item' to include list\n"
-                if $verbose;
-              push @{ $module->{include} }, $item;
-          }
-      }
+            print "# Adding '$item' to include list\n"
+              if $debug;
+            push @{ $module->{include} }, $item;
+        }
+    }
 }
 
+warn "process targets...\n";
 TARGET: foreach my $target ( @{ $targets{targets} } ) {
-      if ( defined $target->{condition} ) {
-          my $condition = $target->{condition};
-          foreach my $c (
-              ref($condition) eq 'ARRAY'
-              ? @{$condition}
-              : $condition
-            )
-          {
-              print "# Checking condition: '$c'\n" if $verbose;
-              if ( system($c) != 0 ) {
-                  next TARGET;
-              }
-          }
-      }
-      else {
-          print "# No condition set\n" if $verbose;
-      }
+    if ( defined $deftarget ) {
+        if ( $target->{name} ne $deftarget ) {
+            next;
+        }
+        else {
 
-      if ($verbose) {
-          print "# Running target ", ( $target->{name} || '' ), "\n";
-      }
-      my $list_command = $target->{list_command};
+            # target was specified -- skip checking condition
+        }
+    }
+    else {
+        if ( defined $target->{condition} ) {
+            my $condition = $target->{condition};
+            foreach my $c (
+                ref($condition) eq 'ARRAY'
+                ? @{$condition}
+                : $condition
+              )
+            {
+                print "# Checking condition: '$c'\n" if $debug;
+                if ( ref($c) eq 'CODE' ) {
+                    if ( not &{$c} ) {
+                        next TARGET;
+                    }
+                }
+                elsif ( system($c) != 0 ) {
+                    next TARGET;
+                }
+            }
+        }
+        else {
+            print "# No condition set\n" if $debug;
+        }
+    }
 
-      print "# List command: $list_command\n" if $verbose;
+    if ($debug) {
+        print "# Running target ", ( $target->{name} || '' ), "\n";
+    }
+    my $list_command = $target->{list_command};
 
-      # get a list of all changed or added files
-      open my $handle, $list_command . " |"
-        || die "Could not run VC list operation ($list_command). Stopped";
-      my @includes;
-      while ( my $file = <$handle> ) {
-          chomp $file;
-          handle_file( $target, $file );
-      }
-      close $handle;
+    print "# List command: $list_command\n" if $debug;
 
-      # compose a list of files to exclude
-      foreach my $module ( @{ $target->{modules} } ) {
-          my $path = $module->{path};
-          my $dest = $module->{dest};
+    # get a list of all changed or added files
+    open my $handle, $list_command . " |"
+      || die "Could not run VC list operation ($list_command). Stopped";
+    my @includes;
+    while ( my $file = <$handle> ) {
+        chomp $file;
+        handle_file( $target, $file );
+    }
+    close $handle;
 
-          my ( $exclude_fh, $exclude_filename ) = tempfile();
-          foreach my $entry ( @{ $module->{exclude} } ) {
-              print $exclude_fh "- /$entry\n";
-          }
-          $exclude_fh->close();
+    # compose a list of files to exclude
+    foreach my $module ( @{ $target->{modules} } ) {
+        my $path = $module->{path};
+        my $dest = $module->{dest};
 
-          my ( $include_fh, $include_filename ) = tempfile();
-          foreach my $entry ( @{ $module->{include} } ) {
-              print $include_fh "+ /$entry\n";
-          }
-          $include_fh->close();
+        my ( $exclude_fh, $exclude_filename ) = tempfile();
+        foreach my $entry ( @{ $module->{exclude} } ) {
+            print $exclude_fh "- /$entry\n";
+        }
+        $exclude_fh->close();
 
-          my $sync_policy = $module->{sync_policy};
-          if ( $sync_policy eq 'full' ) {
+        my ( $include_fh, $include_filename ) = tempfile();
+        foreach my $entry ( @{ $module->{include} } ) {
+            print $include_fh "+ /$entry\n";
+        }
+        $include_fh->close();
+
+        my $sync_policy = $module->{sync_policy};
+        if ( $sync_policy eq 'full' ) {
 
 # step 1: clean up target area (delete anything not having an exclude rule)
 # replicate empty directory to target, but exclude the protected files (i. e. delete everything except excluded files)
-              my $emptydir = tempdir( CLEANUP => 1 );
-              print "# Cleaning up target '$dest'\n" if $verbose;
-              system
-"rsync -az $rsyncopts --filter 'merge $exclude_filename' --delete $emptydir/ $dest";
-          }
-          elsif ( $sync_policy ne 'lazy' ) {
-              die "Invalid sync policy '$sync_policy'. Stopped";
-          }
+            my $emptydir = tempdir( CLEANUP => 1 );
+            print "# Cleaning up target '$dest'\n" if $debug;
+            system
+"$rsync -az $rsyncopts --filter 'merge $exclude_filename' --delete $emptydir/ $dest";
+        }
+        elsif ( $sync_policy ne 'lazy' ) {
+            die "Invalid sync policy '$sync_policy'. Stopped";
+        }
 
       # step 2: synchronize all additional/modified files relative to checkpoint
 
-          print "# Syncronizing '$path' to '$dest'\n" if $verbose;
-          system
-"rsync -avz $rsyncopts --filter 'merge $exclude_filename' --filter 'merge $include_filename' --filter '+ */' --filter '- *' --delete $path $dest";
+        print "# Syncronizing '$path' to '$dest'\n" if $debug;
+        system
+"$rsync -az $rsyncopts --filter 'merge $exclude_filename' --filter 'merge $include_filename' --filter '+ */' --filter '- *' $path $dest";
 
-          unlink $exclude_filename;
-          unlink $include_filename;
-      }
+        unlink $exclude_filename;
+        unlink $include_filename;
+    }
 }
 
