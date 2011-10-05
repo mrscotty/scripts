@@ -21,6 +21,11 @@ else
     die "ERROR: /etc/lsb-release not found"
 fi
 
+if [ "$pkg" == "clean" ]; then
+    rm -rf ~/openxpki/dpkg/${dist}/binary
+    exit 1
+fi
+
 cd ~/openxpki || die "Error cd'ing to ~/openxpki"
 git pull
 cd ~/openxpki/trunk/package/debian || die "Error cd'ing to ~/openxpki/trunk/package/debian"
@@ -28,11 +33,6 @@ cd ~/openxpki/trunk/package/debian || die "Error cd'ing to ~/openxpki/trunk/pack
 #for i in core client; do
 #    rm -f ~/openxpki/dpkg/${dist}/binary/${i}/*.deb deb/${i}/*.deb
 #done
-
-if [ "$pkg" eq "clean" ]; then
-    rm -rf ~/openxpki/dpkg/${dist}/binary
-    exit 1
-fi
 
 for i in $pkg; do
     make $i
