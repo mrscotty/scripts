@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# deploy-test.sh
+# deploy-test.sh [ REL [ TARGET ] ]
 #
 # This shell script is for use by the developer during testing. It can
 # run as non-root and will stop openxpki, update the packages
@@ -8,14 +8,26 @@
 # the log files.
 #
 # It looks in the same directory for the helper scripts.
+#
+# For the code packages, the current branch in the code repository is used.
+#
+# For the config package, the target is either the name of the current 
+# branch in the config working repo or, if the branch name is in the format
+# "rel/.+/.+", then "rel/.+/" is removed. 
+#
+# For the dca05-specific patches, the branch dca05 is used. If a release 
+# string was found in the current config branch, that string is prepended
+# to the "dca05" name.
 
 set -x
 
 code="$HOME/git/code"
 config="$HOME/git/config"
 tools="$HOME/git/tools"
-target="dca04"
-codever=0.9.1552-1
+deftarget="dca04"
+#codever=0.9.1552-1
+
+
 
 
 coderpms="perl-openxpki-client perl-openxpki-core perl-openxpki-client-html-mason openxpki-deployment perl-openxpki-client-html-sc openxpki-i18n perl-openxpki-client-scep"

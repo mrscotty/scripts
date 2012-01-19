@@ -22,7 +22,12 @@ else
 fi
 
 if [ "$pkg" == "clean" ]; then
-    rm -rf ~/openxpki/dpkg/${dist}/binary
+    # don't delete those CPAN packages unnecessarily
+    set +x
+    rm -rf ~/openxpki/dpkg/${dist}/binary/core
+    rm -rf ~/openxpki/dpkg/${dist}/binary/client
+    rm -rf ~/openxpki/dpkg/${dist}/binary/client_api
+    set -x
     exit 1
 fi
 
