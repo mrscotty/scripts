@@ -1,0 +1,740 @@
+#!/usr/bin/env perl
+#
+# wdx - WebDAV Transfer
+#
+# This script simplifies the transfer of files to and from a WebDAV
+# server. It also has some special JuJu for copying Git commits.
+#
+
+=head1 NAME
+
+wdx - WebDAV file transfer utility
+
+=head1 SYNOPSIS
+
+wdx [options] COMMAND [file [...]]
+
+ Options:
+   --config         Specify configuration file [default: ~/.wdxrc]
+   --webdav         Base URL for transfering files
+   --patchdir       Location of patch files (for Git patching)
+   --force          Use force for certain agressive tasks
+
+The COMMAND is the name of a wdx command (see below).
+
+=head1 DESCRIPTION
+
+B<wdx> simplifies the transfer of files to and from a WebDAV server.
+It also has some special Juju for transferring Git commits.
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<--config>
+
+Name of the configuration file to use. See the CONFIGURATION
+section below for details.  [Default: ~/.wdxrc]
+
+=item B<--webdav>
+
+Name of the WebDAV URL. Typically, the base URL is given for a directory
+and all pathnames given on the command line are relative to this path.
+
+If the string is a local file path, then direct filesystem access is used
+instead of Curl.
+
+This may also be set in the configuration file.
+
+=item B<--apply> B<--no-apply>
+
+By default, the B<pull> command will attempt to automatically apply any
+patches found. To supress this, use B<--no-apply>. 
+
+=item B<--info>
+
+Display Git top level, branch and head commit.
+
+=item B<--insecure>
+
+Disable certificate checking when connecting via HTTPS.
+
+This may also be set in the configuration file.
+
+=item B<--force>
+
+Be bolder about taking automatic steps.
+
+=item B<--netrc>
+
+Use F<~/.netrc> for authentication. 
+
+Note: this is currently hard-coded to 'true' because passing username
+and password to Curl on the command line is just a really bad idea.
+
+=item B<--debug>
+
+Enable debug messages.
+
+=back
+
+=head1 COMMANDS
+
+=head2 Git Commands
+
+The Git commands are used to transfer commits from one repository to 
+another where there is no direct connection via SSH or the other 
+protocols supported by Git. Basically, this uses the following steps:
+
+=over 4
+
+=item init
+
+Destination host writes current status (i.e.: branch name, commit hash)
+to a status file on the WebDAV.
+
+=item push
+
+Source host reads the status file and generates the patches needed to
+update the destination host and writes them to the WebDAV.
+
+=item pull
+
+Destination host fetches and applies the patches. Afterwards, it updates
+the status as in the first step.
+
+=back
+
+The update process based on the status file only works if the new commits
+on the destination host have the same SHA1 hashes as on the source host.
+For this to work, the commit history must be linear (i.e. no branching/merging,
+just simple commits) and the environment variables GIT_AUTHOR_NAME, 
+GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL must be set
+identically on both systems.
+
+=head2 File Commands
+
+The file commands are just helpers to simplify using B<curl>.
+
+=over 4
+
+=item ls DIRECTORY
+
+Lists the contents of the remote WebDAV. The given DIRECTORY is prepended
+with the path set using the B<webdav> option.
+
+=item put
+
+Copys a file to the remote WebDAV.
+
+=item get
+
+Copys a file from the remote WebDAV.
+
+=item rm
+
+Removes a file from the remote WebDAV.
+
+=back
+
+=head1 CONFIGURATION
+
+The configuration file is found in F<$HOME/.wdxrc> and is read during startup.
+Use the B<--config> option to specify an alternate filename.
+
+The file uses Perl syntax and the anonymous hash C<$cfg> must be set.
+
+  $cfg = {
+    default => {
+        webdav => 'https://www.mywebdav.net',
+        netrc => 1,
+    },
+    '/Volumes/Data/git/openxpki' => {
+        webdav => '/Volumes/www.mywebdav.net',
+        statusfile => 'oxixfer/status.cfg',
+    },
+
+  }
+=head1 AUTHOR
+
+Scott Hardin
+
+=head1 SEE ALSO
+
+L<curl(1)>
+
+=cut
+
+use strict;
+use warnings;
+use Getopt::Long;
+
+our $config = $ENV{HOME} . '/.wdxrc';
+our $cfg;    # contains config hash
+our $verbose;
+our $debug;
+
+our %curr = ();
+our %opts = ( apply => 1, netrc => 1, );
+
+GetOptions(
+    \%opts,     'apply!',    'info!',  'verbose!', 'config=s', 'force!',
+    'webdav=s', 'insecure!', 'netrc!', 'debug!',
+) or die "Error: invalid option";
+
+our $curl     = 'curl';
+our $curlopts = '--fail --silent';
+
+if ( exists $opts{debug} ) {
+    $debug = $opts{debug};
+}
+if ( exists $opts{verbose} ) {
+    $verbose = $opts{verbose};
+}
+
+############################################################
+# SUBROUTINES
+############################################################
+
+sub host {
+    my $host = `hostname`;
+    chomp $host;
+    return $host;
+}
+
+sub gitbranch {
+    my $GIT;
+    open( $GIT, "git branch|" ) or die "Error running 'git branch': $!";
+    while (<$GIT>) {
+        if (s/^\*\s*//) {
+            chomp;
+            return $_;
+        }
+    }
+    return;
+}
+
+sub gittoplevel {
+    my $top = `git rev-parse --show-toplevel 2>/dev/null`;
+    chomp $top;
+    return $top;
+}
+
+sub githead {
+    my $commit = `git rev-parse HEAD`;
+    chomp $commit;
+    return $commit;
+}
+
+# getfile(FILENAME [, CODEREF ])
+# Opens the given filename and returns the contents in a list of scalar
+# values. Optionally, a CODE reference can be passed that is called for
+# each line.
+sub getfile {
+    my $uri = shift or die "Error: getfile() requires parameter";
+    my $cb = shift;
+    my $FILE;
+    our @ret = ();  
+
+    if ( not $cb ) {
+        $cb = sub { push @ret, @_; };
+    }
+
+
+   # This is a dumb-ass way of checking for a uri
+   # Note: it doesn't work right with 'file:///', but I don't care at the moment
+    if ( $uri =~ m/^[a-zA-Z]+:\/\// ) {
+        if ( not open( $FILE, "$curl $curlopts '$uri'|" ) ) {
+            die "Error fetching '$uri': $!";
+        }
+    }
+    elsif ( not open( $FILE, "<$uri" ) ) {
+        die "Error fetching '$uri': $!";
+    }
+
+    while (<$FILE>) {
+        $cb->($_);
+    }
+    close $FILE;
+    return @ret;
+}
+
+# openuri(URI, [MODE])
+# Determines whether to use curl or direct file access and returns
+# an open filehandle ready for reading or writing.
+#
+# The mode may be either 'r' for reading or 'w' for writing. The default is 'r'.
+sub openuri {
+    my $uri = shift or die "Error: openuri() requires parameter";
+    die "NOT IMPLEMENTED";
+
+    # Determine mode
+
+    my $mode = shift;
+    if ( (not defined $mode) or ($mode eq 'r') ) {
+        $mode = '<';
+    } elsif ( $mode eq 'w' ) {
+        $mode = '>';
+    } else {
+        die "Error: openuri() mode '$mode' invalid";
+    }
+
+    my $FILE;
+
+   # This is a dumb-ass way of checking for a uri
+   # Note: it doesn't work right with 'file:///', but I don't care at the moment
+    if ( $uri =~ m/^[a-zA-Z]+:\/\// ) {
+        my $cmd = "$curl $curlopts '$uri'";
+        if ( $mode eq '<' ) { # read from pipe
+            $mode = '-|';
+        } else {
+            $mode = '|-';
+        }
+        if ( not open( $FILE, $mode, "$curl $curlopts '$uri'" ) ) {
+            die "Error fetching '$uri': $!";
+        }
+    }
+    elsif ( not open( $FILE, "<$uri" ) ) {
+        die "Error fetching '$uri': $!";
+    }
+    
+
+
+}
+
+# putfile(FILENAME, CODEREF | LIST )
+# Opens the given filename for writing. If the given argument is a CODE
+# reference, that code is called and the ouput is written to the file.
+# When the code returns C<undef>, the writing is finished. If, instead of 
+# a CODE reference, the arguments are a list of scalars, these values are
+# written to the file.
+sub putfile {
+    my $uri = shift or die "Error: getfile() requires parameter";
+    my $FILE;
+
+    # Open the output file handle.
+
+   # This is a dumb-ass way of checking for a uri
+   # Note: it doesn't work right with 'file:///', but I don't care at the moment
+    if ( $uri =~ m/^[a-zA-Z]+:\/\// ) {
+        my $curlcmdline = "$curl $curlopts --upload-file - $uri";
+        $curlcmdline .= ' >/dev/null' unless $debug;
+        print "Running '$curlcmdline'\n" if $debug;
+
+        if ( not open( $FILE, "|$curlcmdline" ) ) {
+            die "Error opening handle to '$uri': $!";
+        }
+        print "Opened handle to $uri using $curl\n" if $debug;
+    }
+    elsif ( not open( $FILE, ">$uri" ) ) {
+        die "Error writing to '$uri': $!";
+    }
+
+    # Figure out whether to use CODE ref or just use the arguments
+    # as scalars.
+
+    if ( ref($_[0] eq 'CODE' ) ) {
+        my $ln;
+        while (defined($ln = $_[0]->() )) {
+            print $FILE $ln;
+        }
+    } else {
+        print $FILE @_;
+    }
+    close $FILE;
+}
+
+sub getstatus {
+    my $uri = shift or die "Error: getstatus() requires parameter";
+    my $STAT;
+
+   # This is a dumb-ass way of checking for a uri
+   # Note: it doesn't work right with 'file:///', but I don't care at the moment
+    if ( $uri =~ m/^[a-zA-Z]+:\/\// ) {
+        if ( not open( $STAT, "$curl $curlopts '$uri'|" ) ) {
+            die "Error fetching '$uri': $!";
+        }
+    }
+    elsif ( not open( $STAT, "<$uri" ) ) {
+        die "Error fetching '$uri': $!";
+    }
+
+    my %stat = ();
+    while (<$STAT>) {
+        chomp;
+        next if m/^\s*#/ or m/^\s*$/;
+        my ( $k, $v ) = split( /:\s*/, $_, 2 );
+        $stat{$k} = $v;
+    }
+    close $STAT;
+    return %stat;
+}
+
+# putstatus(STATUS)
+sub putstatus {
+    my %params = @_;
+    my %status = ();
+    foreach my $k (qw( host branch head )) {
+        print "putstatus() assigning $k.\n" if $debug;
+        $status{$k} = $params{$k};
+    }
+
+    my $base       = getcfg('webdav') or die "No 'webdav' set in config.";
+    my $statusfile = getcfg('statusfile');
+    my $staturl    = $base . '/' . $statusfile;
+
+    print "Initializing status on $staturl '...\n" if $verbose;
+
+    my $STAT;
+
+   # This is a dumb-ass way of checking for a uri
+   # Note: it doesn't work right with 'file:///', but I don't care at the moment
+    if ( $staturl =~ m/^[a-zA-Z]+:\/\// ) {
+        my $curlcmdline = "$curl $curlopts --upload-file - $staturl";
+        $curlcmdline .= ' >/dev/null' unless $debug;
+        print "Running '$curlcmdline'\n" if $debug;
+
+        if ( not open( $STAT, "|$curlcmdline" ) ) {
+            die "Error uploading status to '$staturl': $!";
+        }
+        print "Opened handle to $staturl using $curl\n" if $debug;
+    }
+    elsif ( not open( $STAT, ">$staturl" ) ) {
+        die "Error writing status to '$staturl': $!";
+    }
+
+    foreach my $k ( sort keys %status ) {
+        if ( not defined $status{$k} ) {
+            die "Internal error: status for $k not defined";
+        }
+        print "WRITE: ", $k, ': ', $status{$k}, "\n" if $debug;
+        print $STAT $k, ': ', $status{$k}, "\n";
+    }
+    close $STAT;
+}
+
+# getcfg(PARAM) - Get value of given parameter
+sub getcfg {
+    my $key = shift;
+
+    # The order of precedence is:
+    # 1. command line parameters
+    # 2. entry from section corresponding to current git top level
+    # 3. default section in config file
+    #
+    if ( exists $opts{$key} ) {
+        print "Using command line option: '$key' => ", $opts{$key}, "\n" if $debug;
+        return $opts{$key};
+    }
+    else {
+        my @path   = qw( default );
+        my $gittop = $curr{toplevel};
+        if ($gittop) {
+            unshift @path, $gittop;
+
+            foreach my $sect (@path) {
+                print "Checking for '$key' in section '$sect'..." if $debug;
+                if (    ( ref( $cfg->{$sect} ) eq 'HASH' )
+                    and ( exists( $cfg->{$sect}->{$key} ) ) )
+                {
+                    print " Found.\n" if $debug;
+                    return $cfg->{$sect}->{$key};
+                }
+                else {
+                    print "\n" if $debug;
+                }
+            }
+            return;
+        }
+    }
+}
+
+# listdir(PATH) - list contents of given directory
+sub listdir {
+    my $path = shift;
+    print "DEBUG: entered listdir($path)\n" if $debug;
+    if ( $path =~ m/^[a-zA-Z]+:\/\// ) {
+
+        print "DEBUG: listdir() fetching '$path' using curl\n" if $debug;
+        my $CURL;
+        if ( open( $CURL, "$curl $curlopts $path|" ) ) {
+            print "DEBUG: after open: \$!=$!\n" if $debug;
+            my @entries     = ();
+            my $seen_parent = 0;
+            print "DEBUG: listdir() - opened with '$curl $curlopts $path|'\n" if $debug;
+            while (<$CURL>) {
+                print "CURLDIR: $_" if $debug;
+                chomp;
+                if ( $seen_parent and m/HREF="([^"]+)"/ ) {
+                    push @entries, $1;
+                }
+                elsif (/>Parent Directory<\/A>/) {
+                    $seen_parent++;
+                }
+                elsif ( m/^The document has moved <A HREF="([^"]+)">/ ) {
+                    my $newdir = $1;
+                    print "$path -> $newdir\n" if $debug;
+                    close $CURL;
+                    return listdir($newdir);
+                }
+            }
+            print "DEBUG: after read: \$!=$!\n" if $debug;
+            print "DEBUG: closing curl\n" if $debug;
+            close $CURL;
+            print "DEBUG: after close: \$!=$!\n" if $debug;
+            return @entries;
+        }
+        else {
+            if ($verbose) {
+                print "Error fetching '$path': $!";
+            }
+
+        }
+        return;
+
+    }
+    else {
+        print "DEBUG: listdir() fetching '$path' using readdir\n" if $debug;
+        my $DIR;
+        opendir( $DIR, $path ) or die "Error opening dir '$path': $!";
+        my @ret = readdir($DIR);
+        closedir($DIR);
+        return @ret;
+    }
+}
+
+############################################################
+# COMMANDS
+############################################################
+
+my %command_table = (
+    'push' => \&cmd_push,
+    'pull' => \&cmd_pull,
+    'init' => \&cmd_init,
+    'ls'   => \&cmd_ls,
+    'cat'   => \&cmd_cat,
+    'cp'  => \&cmd_cp,
+    'rm'   => \&cmd_rm,
+);
+
+sub cmd_push {
+
+    my $base     = getcfg('webdav')   or die "No 'webdav' set in config.";
+    my $patchdir = getcfg('patchdir') or die "No 'patchdir' set in config.";
+    my $statusfile = getcfg('statusfile')
+      or die "Error: no statusfile set in config";
+    $patchdir   = $base . '/' . $patchdir;
+    $statusfile = $base . '/' . $statusfile;
+
+    # Check for patch files from previous transfer
+
+    my @prev = grep { m/\.patch$/ } listdir($patchdir);
+
+    if (@prev) {
+        if ( $opts{force} ) {
+            unlink( map { $patchdir . '/' . $_ } @prev )
+              or die "Error deleting old patches: $!";
+        }
+        else {
+            die "Error: ", scalar(@prev),
+              " patch file(s) already exist(s) in $patchdir.\n";
+        }
+    }
+
+    my %status = getstatus($statusfile);
+
+    if ( not %status ) {
+        die "No status for $statusfile\n";
+    }
+
+    print "CURR: ", join( ', ', %curr ),   "\n" if $debug;
+    print "STAT: ", join( ', ', %status ), "\n" if $debug;
+
+    if ( $curr{branch} ne $status{branch} ) {
+        die "Error: not on same branch (", $status{branch}, ")\n";
+    }
+
+    my $remhead = $status{head};
+    system("git format-patch --output-directory '$patchdir' $remhead");
+
+}
+
+sub cmd_init {
+    putstatus(%curr);
+}
+
+sub cmd_pull {
+
+    # Check for patch files from previous transfer
+    my @prev = grep { m/\.patch$/ } listdir('.');
+
+    if (@prev) {
+        die "Error: patch files already exist in current directory.";
+    }
+
+    my $base = getcfg('webdav') or die "Error: no 'webdav' set in config.";
+    my $patchdir = getcfg('patchdir')
+      or die "Error: no 'patchdir' set in config.";
+    my $statusfile = getcfg('statusfile')
+      or die "Error: no 'statusfile' set in config.";
+    my %status = getstatus( $base . '/' . $statusfile );
+
+    if ( not %status ) {
+        die "Error: not status file on WebDAV. Run 'wdx init'.";
+    }
+
+    print "STATUS: ", join( ', ', %status ), "\n" if $debug;
+
+    ##################
+    # Sanity checks...
+    ##################
+
+    my $err = 0;
+    foreach my $k (qw( host branch head )) {
+        my $got = defined $status{$k} ? $status{$k} : '<undef>';
+        my $exp = defined $curr{$k}   ? $curr{$k}   : '<undef>';
+
+        if ( $got ne $exp ) {
+            $err++;
+            warn "Param $k mismatch: got '$got', expected '$exp'\n";
+        }
+    }
+    die "$err error(s)." if $err;
+
+    print "Checking patch directory '$base/$patchdir' for files.\n" if $verbose;
+    my @files = sort( listdir( $base . '/' . $patchdir ) );
+    print "PATCH FILES: ", join( ', ', @files ), "\n" if $debug;
+
+    foreach my $file (@files) {
+        next unless $file =~ m/\.patch$/;    # only get patches
+        print "Fetching $file...\n" if $verbose;
+        system("$curl $curlopts --output '$file' '$base/$patchdir/$file'");
+    }
+
+    if (@files) {
+        my $am_ok = 1;
+        if ($opts{apply}) {
+            print "Applying patches...\n" if $verbose;
+            my $rc =
+              system( 'git', 'am', '--committer-date-is-author-date', @files );
+            $rc    = $rc >> 8;
+            $am_ok = not $rc;
+            if ($am_ok) {
+                print "Patches applied; deleting patch files.\n" if $verbose;
+                unlink(@files) or die "Error deleting patch files: $!";
+                print "Updating remote status file.\n" if $verbose;
+                $curr{head}   = githead();  # get new head commit
+                putstatus(%curr);
+                exit;
+            }
+        }
+
+        # The following logic block is a bit confusing, but I
+        # hope it works correctly. It's only info, anyway.
+
+        if ($am_ok) {
+            print "Now run the following:\n\n";
+            print "\tgit am --committer-date-is-author-date *.patch\n";
+        }
+        else {
+            print "Fix problems with 'git am' and then run:\n\n";
+        }
+        print "\trm *.patch\n", "\t$0 --init\n\n";
+
+        if ( not $am_ok ) {
+            exit 1;
+        }
+    }
+
+}
+
+sub cmd_ls {
+    my $dir = shift || '';
+    my $base       = getcfg('webdav') or die "No 'webdav' set in config.";
+
+    my @dir = listdir($base . '/' . $dir);
+    foreach my $entry ( @dir ) {
+        print $entry, "\n";
+    }
+}
+
+sub cmd_cat {
+    my $name = shift or die "Error: 'cat' requires argument.";
+    
+    my $base       = getcfg('webdav') or die "No 'webdav' set in config.";
+    my $file = $base . '/' . $name;
+
+    my @ret = getfile($file);
+
+    print @ret;
+}
+
+# copy one or more files to a destination...
+sub cmd_cp {
+    # get destination from end of args first
+    my $dest = pop @_;
+    
+    if ( scalar(@_) == 0 ) {
+        die "Error: no destination specified";
+    } elsif ( scalar(@_ ) >=2 ) {
+        die "Error: multi-file copy not supported yet";
+    }
+
+    my $src = shift;
+
+    
+
+    
+}
+
+############################################################
+# INIT
+############################################################
+
+if ( exists $opts{config} ) {
+    $config = $opts{config};
+}
+do $config or die "Error reading config: $@";
+
+$curr{toplevel} = gittoplevel();
+
+if ( getcfg('insecure') ) {
+    $curlopts .= ' --insecure';
+}
+
+if ( getcfg('netrc') ) {
+    $curlopts .= ' --netrc';
+}
+
+# We need these for reading config vals properly
+$curr{host}   = host();
+$curr{branch} = gitbranch();
+$curr{head}   = githead();
+
+if ( $opts{info} ) {
+    print "Git top level: ", $curr{toplevel}, "\n",
+      "     Git branch: ", $curr{branch}, "\n",
+      "       Git head: ", $curr{head},   "\n",
+      "       Hostname: ", $curr{host},   "\n",
+      "           Base: ", getcfg('webdav') || '', "\n",
+      "    Status file: ", getcfg('statusfile') || '', "\n",
+      "Patch directory: ", getcfg('patchdir') || '', "\n",
+      "\n";
+
+    exit;
+}
+
+my $cmd = shift @ARGV;
+
+if ( exists $command_table{$cmd} ) {
+    my $ref = $command_table{$cmd};
+    if ( ref($ref) eq 'CODE' ) {
+        $ref->(@ARGV);
+    }
+    else {
+        die "$0: command '$cmd' not implemented";
+    }
+}
+else {
+    die "$0: unknown command '$cmd'";
+}
