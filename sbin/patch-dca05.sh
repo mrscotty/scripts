@@ -27,7 +27,9 @@ else
 fi
 
 files="files/etc/openxpki/instances/level2/config.xml \
+    files/etc/openxpki/instances/level2/notification.xml \
     files/etc/openxpki/instances/level2/token.xml \
+    files/etc/openxpki/instances/level2/serverca/acl.xml \
     files/etc/openxpki/instances/level2/serverca/auth.xml \
     files/etc/openxpki/instances/level2/serverca/ldappublic.xml \
     files/etc/openxpki/instances/level2/serverca/profile.xml \
@@ -36,9 +38,13 @@ files="files/etc/openxpki/instances/level2/config.xml \
     files/etc/openxpki/instances/level2/userca/profile.xml \
     files/etc/openxpki/instances/level2/userca/workflow_activity_smartcard_pin_unblock.xml \
     files/etc/openxpki/policy.pm \
+    files/etc/openxpki/mod_perl-startup.pl \
     files/etc/sysconfig/openxpki.local"
 
 #tar -cf - -C files $files | sudo tar -xf -C /
 git archive "$commit" $files | sudo tar -xvf - -C / --strip-components 1
 sudo chmod g-w /etc
+
+# Fetch httpd conf
+git show "$commit:ibm_managed/apache/httpd.conf" | sudo tee /var/applications/apache/pki/conf/httpd.conf >/dev/null
 

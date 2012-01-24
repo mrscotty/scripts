@@ -10,7 +10,7 @@ our @oxirpms = ( qw( openxpki-i18n perl-openxpki-client perl-openxpki-client-htm
 our @oxirpmsforce = qw( dca04 );
 
 my $cfgname = 'dca04';
-my $oxicfgrpm = `ls -t $ENV{HOME}/rpmbuild/*/${cfgname}*.rpm |head -n 1`;
+my $oxicfgrpm = `ls -t $ENV{HOME}/rpmbuild/RPMS/*/${cfgname}*.rpm |head -n 1`;
 chomp $oxicfgrpm;
 
 sub pause {
