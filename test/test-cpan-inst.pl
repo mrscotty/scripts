@@ -30,7 +30,7 @@ sub ask {
     print "Continue? [Y/n/q]: ";
     while ( 1 ) {
         my $ans = <STDIN>;
-        if ( $ans =~ m/^y/i ) {
+        if ( $ans =~ m/^y/i or $ans =~ m/^\s*$/ ) {
             $|=$bar;
             return 1;
         } elsif ( $ans =~ m/^n/i ) {
@@ -124,6 +124,12 @@ print "RC=$rc\n";
 
 if (ask("Ready to (forced) install config RPM $oxicfgrpm...\n")){
 $rc = system('sudo', 'rpm', '-ivh', '--force', $oxicfgrpm);
+$rc = $rc >> 8;
+print "RC=$rc\n";
+}
+
+if (ask("Ready to patch dca05 config...\n")){
+$rc = system("(cd $ENV{HOME}/git/config && $ENV{HOME}/git/tools/sbin/patch-dca05.sh dca05)");
 $rc = $rc >> 8;
 print "RC=$rc\n";
 }

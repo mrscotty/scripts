@@ -29,8 +29,10 @@ fi
 files="files/etc/openxpki/instances/level2/config.xml \
     files/etc/openxpki/instances/level2/token.xml \
     files/etc/openxpki/instances/level2/serverca/auth.xml \
+    files/etc/openxpki/instances/level2/serverca/ldappublic.xml \
     files/etc/openxpki/instances/level2/serverca/profile.xml \
     files/etc/openxpki/instances/level2/userca/auth.xml \
+    files/etc/openxpki/instances/level2/userca/ldappublic.xml \
     files/etc/openxpki/instances/level2/userca/profile.xml \
     files/etc/openxpki/instances/level2/userca/workflow_activity_smartcard_pin_unblock.xml \
     files/etc/openxpki/policy.pm \
