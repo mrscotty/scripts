@@ -4,7 +4,14 @@ use strict;
 use warnings;
 
 our $modlist;
-our $rpmdir = $ENV{HOME} . '/xfer/dca04';
+our $cpanrpmdir = $ENV{HOME} . '/xfer/dca04';
+our $oxirpmdir = $ENV{HOME} . '/git/code/trunk/package/suse';
+our @oxirpms = ( qw( openxpki-i18n perl-openxpki-client perl-openxpki-client-html-mason perl-openxpki-client-html-sc perl-openxpki-client-scep perl-openxpki-core openxpki-deployment) );
+our @oxirpmsforce = qw( dca04 );
+
+my $cfgname = 'dca04';
+my $oxicfgrpm = `ls -t $ENV{HOME}/rpmbuild/*/${cfgname}*.rpm |head -n 1`;
+chomp $oxicfgrpm;
 
 sub pause {
     if (@_) {
@@ -13,6 +20,30 @@ sub pause {
     print "Press <Enter> to continue...";
     my $junk = <STDIN>;
 }
+
+sub ask {
+    if (@_) {
+        print @_;
+    }
+    my $bar = $|;
+    $|=1;
+    print "Continue? [Y/n/q]: ";
+    while ( 1 ) {
+        my $ans = <STDIN>;
+        if ( $ans =~ m/^y/i ) {
+            $|=$bar;
+            return 1;
+        } elsif ( $ans =~ m/^n/i ) {
+            $|=$bar;
+            return 0;
+        } elsif ( $ans =~ m/^q/i ) {
+            exit;
+        }
+
+        print "Really continue? [Y/n/q]: ";
+    }
+}
+
 
 # return true value if given RPM package is installed
 sub rpminstalled {
@@ -39,35 +70,65 @@ my @updatepkglist =
   grep { not $modlist->{$_}->{ignore} }
   sort keys %{$modlist};
 
+my @inst = 
+  map { s/::/-/g; 'perl-' . $_ }
+  grep { not $modlist->{$_}->{update} }
+  grep { not $modlist->{$_}->{ignore} }
+  sort keys %{$modlist};
+
+my @uninstall      = grep { rpminstalled($_) } @pkglist;
+my @forceuninstall = grep { rpminstalled($_) } @updatepkglist;
+    
 print "FOUND ", scalar(@pkglist),       " PACKAGE(S)\n";
 print "FOUND ", scalar(@updatepkglist), " UPDATE PACKAGE(S)\n";
 print "PKGLIST: ",        join( ', ', @pkglist ),       "\n";
 print "UPDATE PKGLIST: ", join( ', ', @updatepkglist ), "\n";
-
-my @uninstall      = grep { rpminstalled($_) } @pkglist;
-my @forceuninstall = grep { rpminstalled($_) } @updatepkglist;
+print "FORCE UNINSTALL: ", join(', ', @forceuninstall), "\n";
 
 my $rc;
 
 if (@forceuninstall) {
-    pause( "Ready to force uninstall ",
-        scalar(@forceuninstall), " package(s)\n" );
+    if (ask( "Ready to force uninstall ",
+        scalar(@forceuninstall), " package(s)\n" )) {
     $rc = system( 'sudo', 'rpm', '-e', '--nodeps', @forceuninstall );
     $rc = $rc >> 8;
     print "RC=$rc\n";
 }
+}
 
 if (@uninstall) {
-    pause( "Ready to uninstall ", scalar(@uninstall), " package(s)\n" );
+    if ( ask( "Ready to uninstall ", scalar(@uninstall), " package(s)\n" )) {
     $rc = system( 'sudo', 'rpm', '-e', @uninstall );
     $rc = $rc >> 8;
     print "RC=$rc\n";
 }
+}
 
-pause("Ready to install RPMS found in $rpmdir...\n");
-$rc = system("sudo rpm -ivh $rpmdir/*.rpm");
+if ( ask("Ready to install RPMS found in $cpanrpmdir...\n") ) {
+$rc = system("sudo rpm -ivh $cpanrpmdir/*.rpm");
 $rc = $rc >> 8;
 print "RC=$rc\n";
+}
+
+if (ask("Ready to deinstall OpenXPKI RPMS...\n")) {
+$rc = system('sudo', 'rpm', '-e', @oxirpms, @oxirpmsforce);
+$rc = $rc >> 8;
+print "RC=$rc\n";
+}
+
+if (ask("Ready to install RPMS found in $oxirpmdir...\n")){
+$rc = system("sudo rpm -ivh $oxirpmdir/*.rpm");
+$rc = $rc >> 8;
+print "RC=$rc\n";
+}
+
+if (ask("Ready to (forced) install config RPM $oxicfgrpm...\n")){
+$rc = system('sudo', 'rpm', '-ivh', '--force', $oxicfgrpm);
+$rc = $rc >> 8;
+print "RC=$rc\n";
+}
+
+
 
 
 
