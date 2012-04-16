@@ -4,8 +4,20 @@
 
 function die {
     echo "$@" >&2
-    exit 1
+    # only exit if running as script and not as interactive bash
+    # shell (i.e. cut-n-paste)
+    if [ $0 != "-bash" ]; then
+        exit 1
+    fi
 }
+
+## Check status of current working branch
+gitstatus=`git status --porcelain|wc -l`
+if [ $gitstatus != 0 ]; then
+    die "Error: git working directory not clean. Run 'git status' for unresolved changes."
+fi
+
+die "NOT FINISHED!"
 
 pkg="$@"
 

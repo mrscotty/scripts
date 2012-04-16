@@ -116,6 +116,9 @@ identically on both systems.
 
 The file commands are just helpers to simplify using B<curl>.
 
+The remote filename is in the format C<alias:path>, where C<alias> corresponds
+to an entry in the configuration file.
+
 =over 4
 
 =item ls DIRECTORY
@@ -266,7 +269,6 @@ sub getfile {
 # The mode may be either 'r' for reading or 'w' for writing. The default is 'r'.
 sub openuri {
     my $uri = shift or die "Error: openuri() requires parameter";
-    die "NOT IMPLEMENTED";
 
     # Determine mode
 
@@ -284,22 +286,23 @@ sub openuri {
    # This is a dumb-ass way of checking for a uri
    # Note: it doesn't work right with 'file:///', but I don't care at the moment
     if ( $uri =~ m/^[a-zA-Z]+:\/\// ) {
-        my $cmd = "$curl $curlopts '$uri'";
+        my $cmd = "$curl $curlopts";
         if ( $mode eq '<' ) { # read from pipe
             $mode = '-|';
         } else {
             $mode = '|-';
+            $cmd .= ' --upload-file -';
+
         }
-        if ( not open( $FILE, $mode, "$curl $curlopts '$uri'" ) ) {
+        $cmd .= " '$uri'";
+        if ( not open( $FILE, $mode, $cmd ) ) {
             die "Error fetching '$uri': $!";
         }
     }
     elsif ( not open( $FILE, "<$uri" ) ) {
         die "Error fetching '$uri': $!";
     }
-    
-
-
+    return $FILE;
 }
 
 # putfile(FILENAME, CODEREF | LIST )
@@ -314,21 +317,23 @@ sub putfile {
 
     # Open the output file handle.
 
-   # This is a dumb-ass way of checking for a uri
-   # Note: it doesn't work right with 'file:///', but I don't care at the moment
-    if ( $uri =~ m/^[a-zA-Z]+:\/\// ) {
-        my $curlcmdline = "$curl $curlopts --upload-file - $uri";
-        $curlcmdline .= ' >/dev/null' unless $debug;
-        print "Running '$curlcmdline'\n" if $debug;
+    $FILE = openuri($uri, 'w') or die "Error opening $uri: $@";
 
-        if ( not open( $FILE, "|$curlcmdline" ) ) {
-            die "Error opening handle to '$uri': $!";
-        }
-        print "Opened handle to $uri using $curl\n" if $debug;
-    }
-    elsif ( not open( $FILE, ">$uri" ) ) {
-        die "Error writing to '$uri': $!";
-    }
+#   # This is a dumb-ass way of checking for a uri
+#   # Note: it doesn't work right with 'file:///', but I don't care at the moment
+#    if ( $uri =~ m/^[a-zA-Z]+:\/\// ) {
+#        my $curlcmdline = "$curl $curlopts --upload-file - $uri";
+#        $curlcmdline .= ' >/dev/null' unless $debug;
+#        print "Running '$curlcmdline'\n" if $debug;
+#
+#        if ( not open( $FILE, "|$curlcmdline" ) ) {
+#            die "Error opening handle to '$uri': $!";
+#        }
+#        print "Opened handle to $uri using $curl\n" if $debug;
+#    }
+#    elsif ( not open( $FILE, ">$uri" ) ) {
+#        die "Error writing to '$uri': $!";
+#    }
 
     # Figure out whether to use CODE ref or just use the arguments
     # as scalars.
@@ -348,16 +353,7 @@ sub getstatus {
     my $uri = shift or die "Error: getstatus() requires parameter";
     my $STAT;
 
-   # This is a dumb-ass way of checking for a uri
-   # Note: it doesn't work right with 'file:///', but I don't care at the moment
-    if ( $uri =~ m/^[a-zA-Z]+:\/\// ) {
-        if ( not open( $STAT, "$curl $curlopts '$uri'|" ) ) {
-            die "Error fetching '$uri': $!";
-        }
-    }
-    elsif ( not open( $STAT, "<$uri" ) ) {
-        die "Error fetching '$uri': $!";
-    }
+    $STAT = openuri($uri, 'r') or die "Error opening $uri: $@";
 
     my %stat = ();
     while (<$STAT>) {
@@ -385,23 +381,23 @@ sub putstatus {
 
     print "Initializing status on $staturl '...\n" if $verbose;
 
-    my $STAT;
+    my $STAT = openuri($staturl, 'w') or die "Error opening $staturl: $@";
 
-   # This is a dumb-ass way of checking for a uri
-   # Note: it doesn't work right with 'file:///', but I don't care at the moment
-    if ( $staturl =~ m/^[a-zA-Z]+:\/\// ) {
-        my $curlcmdline = "$curl $curlopts --upload-file - $staturl";
-        $curlcmdline .= ' >/dev/null' unless $debug;
-        print "Running '$curlcmdline'\n" if $debug;
-
-        if ( not open( $STAT, "|$curlcmdline" ) ) {
-            die "Error uploading status to '$staturl': $!";
-        }
-        print "Opened handle to $staturl using $curl\n" if $debug;
-    }
-    elsif ( not open( $STAT, ">$staturl" ) ) {
-        die "Error writing status to '$staturl': $!";
-    }
+#   # This is a dumb-ass way of checking for a uri
+#   # Note: it doesn't work right with 'file:///', but I don't care at the moment
+#    if ( $staturl =~ m/^[a-zA-Z]+:\/\// ) {
+#        my $curlcmdline = "$curl $curlopts --upload-file - $staturl";
+#        $curlcmdline .= ' >/dev/null' unless $debug;
+#        print "Running '$curlcmdline'\n" if $debug;
+#
+#        if ( not open( $STAT, "|$curlcmdline" ) ) {
+#            die "Error uploading status to '$staturl': $!";
+#        }
+#        print "Opened handle to $staturl using $curl\n" if $debug;
+#    }
+#    elsif ( not open( $STAT, ">$staturl" ) ) {
+#        die "Error writing status to '$staturl': $!";
+#    }
 
     foreach my $k ( sort keys %status ) {
         if ( not defined $status{$k} ) {
@@ -663,6 +659,7 @@ sub cmd_cat {
     
     my $base       = getcfg('webdav') or die "No 'webdav' set in config.";
     my $file = $base . '/' . $name;
+    warn "cmd_cat() file=$file";
 
     my @ret = getfile($file);
 
@@ -681,6 +678,7 @@ sub cmd_cp {
     }
 
     my $src = shift;
+
 
     
 

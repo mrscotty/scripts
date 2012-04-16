@@ -1,0 +1,219 @@
+#!/usr/bin/env perl
+#
+# This script automates the fetching of patches via WebDAV.
+#
+# IMPORTANT: In order for the local commits to be created with
+# the same SHA1 hash, the following environment variables MUST
+# be the same on both hosts:
+#
+#	GIT_AUTHOR_NAME
+#	GIT_AUTHOR_EMAIL
+#	GIT_COMMITTER_NAME
+#	GIT_COMMITTER_EMAIL
+
+use strict;
+use warnings;
+use Getopt::Long;
+
+my $urlbase = "https://www.cynops.de/customers/3/";
+my $curl = 'curl';
+my $curlopts = '--fail --netrc --insecure --silent';
+
+my $do_init = 0;
+my $do_status = 0;
+my $apply = 0;
+my $verbose = 0;
+my $debug = 0;
+
+GetOptions(
+	'init' => \$do_init,
+	'status' => \$do_status,
+	'apply' => \$apply,
+	'verbose' => \$verbose,
+	'debug' => \$debug,
+) or die "Error: invalid option";
+
+my %curr;
+
+my $patchdir;
+my $staturl;
+
+sub currhost {
+	my $host = `hostname`;
+	chomp $host;
+	return $host;
+}
+
+sub currbranch {
+	my $GIT;
+	open ( $GIT, "git branch|") or die "Error running 'git branch': $!";
+	while(<$GIT>) {
+		if ( s/^\*\s*// ) {
+			chomp;
+			return $_;
+		}
+	}
+	return;
+}
+
+sub currhead {
+	my $commit = `git rev-parse HEAD`;
+	chomp $commit;
+	return $commit;
+}
+
+sub getstatus {
+	my $CURL;
+	if ( open ( $CURL, "$curl $curlopts $staturl|" ) ) {
+		my %stat = ();
+		while (<$CURL>) {
+			chomp;
+			next if m/^\s*#/ or m/^\s*$/;
+			my ($k,$v) = split(/:\s*/, $_, 2);
+			$stat{$k} = $v;
+		}
+		return %stat;
+	}
+}
+
+sub putstatus {
+	my %curr = @_;
+	my %status = ();
+	foreach my $k ( qw( host branch head ) ) {
+		$status{$k} = $curr{$k};
+	}
+	
+	my $CURL;
+	if ( open ( $CURL, "|$curl $curlopts --upload-file - $staturl >/dev/null" ) ) {
+		foreach my $k ( sort keys %status ) {
+			print $CURL $k, ': ', $status{$k}, "\n";
+		}
+	} else {
+		die "Error uploading status file: $!";
+	}
+}
+
+sub curldir {
+	my $dir = shift;
+	my $CURL;
+	if ( open ( $CURL, "$curl $curlopts $dir|" ) ) {
+		my @entries = ();
+		my $seen_parent = 0;
+		while ( <$CURL> ) {
+print "CURLDIR: $_" if $debug;
+			chomp;
+			if ( $seen_parent and m/HREF="([^"]+)"/ ) {
+				push @entries, $1;
+			} elsif ( />Parent Directory<\/A>/ ) {
+				$seen_parent++;
+			}
+		}
+		return @entries;
+	}
+	return;
+}
+				
+
+
+
+$curr{host} = currhost();
+$curr{branch} = currbranch();
+$curr{head} = currhead();
+
+$staturl = $urlbase . 'inyo2dca04/' . $curr{host} . '.dat';
+$patchdir = $urlbase . 'inyo2dca04/patches/';
+
+##########
+# Precheck
+#########
+
+my $DIR;
+opendir($DIR, ".") or die "Error opening CWD: $!";
+my @prev = grep { m/\.patch$/ } readdir($DIR);
+
+if ( @prev ) {
+	die "Error: patch files already exist in current directory.\n";
+}
+
+print "CURR: ", join(', ', %curr), "\n" if $debug;
+
+if ( $do_init ) {
+	print "Initializing status on remote WebDAV.\n";
+	putstatus(%curr);
+	exit;
+}
+
+my %status = getstatus();
+
+
+if (not %status) {
+	putstatus(%curr);
+} else {
+	if ( $do_status ) {
+		print "STATUS		LOCAL		REMOTE\n";
+		foreach my $k ( qw( head branch host ) ) {
+			print join("\t", $k.':', $curr{$k}, $status{$k}), "\n";
+		}
+		exit;
+	}
+	print "STATUS: ", join(', ', %status), "\n" if $debug;
+
+	##################
+	# Sanity checks...
+	##################
+
+	my $err = 0;
+	foreach my $k ( qw( host branch head ) ) {
+		my $got = defined $status{$k} ? $status{$k} : '<undef>';
+		my $exp = defined $curr{$k} ? $curr{$k} : '<undef>';
+		
+		if ( $got ne $exp ) {
+			$err++;
+			warn "Param $k mismatch: got '$got', expected '$exp'\n";
+		}
+	}
+	die "$err error(s)." if $err;
+
+	my @files = sort curldir($patchdir);
+	print "PATCH FILES: ", join(', ', @files), "\n" if $debug;
+
+	foreach my $file ( @files ) {
+		next unless $file =~ m/\.patch$/;	# only get patches
+		print "Fetching $file...\n" if $verbose;
+		system("$curl $curlopts --output '$file' '$patchdir/$file'");
+	}
+
+	if ( @files ) {
+		my $am_ok = 0;
+		if ( $apply ) {
+			print "Applying patches...\n" if $verbose;
+			my $rc = system('git', 'am', '--committer-date-is-author-date', @files);
+			$rc = $rc >> 8;
+			$am_ok = not $rc;
+			if ( $am_ok ) {
+				print "Patches applied; deleting patch files.\n" if $verbose;
+				unlink(@files) or die "Error deleting patch files: $!";
+				print "Updating remote status file.\n" if $verbose;
+				putstatus(%curr);
+				exit;
+			}
+		}
+
+		# The following logic block is a bit confusing, but I
+		# hope it works correctly. It's only info, anyway.
+
+		if ( $am_ok ) {
+			print "Now run the following:\n\n";
+		} else {
+			print "Fix problems with 'git am' and then run:\n\n";
+		}
+		if (not $apply) {
+			print "\tgit am --committer-date-is-author-date *.patch\n";
+		}
+		print	"\trm *.patch\n",
+			"\t$0 --init\n\n";
+		if ( not $am_ok ) {
+			exit 1;
+		}
+	}
+}

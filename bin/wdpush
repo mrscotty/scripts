@@ -1,0 +1,94 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use Getopt::Long;
+
+our $urlbase  = '/Volumes/www.cynops.de/';
+our $target   = 'dca04';
+our $patchdir = $urlbase . '/inyo2dca04/patches/';
+our $staturl  = $urlbase . '/inyo2dca04/' . $target . '.dat';
+our $do_force = 0;
+
+our %curr = ();
+
+GetOptions(
+    'force' => \$do_force,
+) or die "Error: invalid option";
+
+sub currbranch {
+    my $GIT;
+    open( $GIT, "git branch|" ) or die "Error running 'git branch': $!";
+    while (<$GIT>) {
+        if (s/^\*\s*//) {
+            chomp;
+            return $_;
+        }
+    }
+    return;
+}
+
+sub gittoplevel {
+    my $top = `git rev-parse --show-toplevel`;
+    chomp $top;
+    return $top;
+}
+
+sub currhead {
+    my $commit = `git rev-parse HEAD`;
+    chomp $commit;
+    return $commit;
+}
+
+sub getstatus {
+    my $STAT;
+    if ( open( $STAT, "<$staturl" ) ) {
+        my %stat = ();
+        while (<$STAT>) {
+            chomp;
+            next if m/^\s*#/ or m/^\s*$/;
+            my ( $k, $v ) = split( /:\s*/, $_, 2 );
+            $stat{$k} = $v;
+        }
+        return %stat;
+    }
+}
+
+$curr{branch} = currbranch();
+$curr{head}   = currhead();
+
+##########
+# Precheck
+##########
+
+my $DIR;
+opendir( $DIR, $patchdir ) or die "Error opening dir '$patchdir': $!";
+my @prev = grep { m/\.patch$/ } readdir($DIR);
+
+if (@prev) {
+    if ($do_force) {
+        unlink( map { $patchdir . '/' . $_ } @prev )
+          or die "Error deleting old patches: $!";
+    }
+    else {
+        die "Error: ", scalar(@prev),
+          " patch file(s) already exist(s) in $patchdir.\n";
+    }
+}
+
+my %status = getstatus();
+
+if ( not %status ) {
+    die "No status for $staturl\n";
+}
+
+print "CURR: ", join( ', ', %curr ),   "\n";
+print "STAT: ", join( ', ', %status ), "\n";
+
+if ( $curr{branch} ne $status{branch} ) {
+    die "Error: not on same branch (", $status{branch}, ")\n";
+}
+
+my $remhead = $status{head};
+system("git format-patch --output-directory '$patchdir' $remhead");
+

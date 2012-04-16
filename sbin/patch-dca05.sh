@@ -19,6 +19,15 @@ if [ "$host" != "dca05" ]; then
     exit 1
 fi
 
+git_dir=$HOME/git/config
+
+if [ ! -d "$git_dir" ]; then
+    echo "Error: $git_dir not found" 1>&2
+    exit 1
+fi
+
+cd $git_dir || exit 1
+
 # reference commit
 if [ -z "$1" ]; then
     commit=HEAD
