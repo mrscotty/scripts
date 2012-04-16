@@ -11,11 +11,37 @@ function die {
     fi
 }
 
+function pkgcommit {
+    dpkg-query --show -f '${Description}\n' "$@" \
+        | grep 'Git commit hash:' \
+        |awk -F': ' '{print $2}' \
+        |awk '{print $1}'
+}
+
+
 ## Check status of current working branch
 gitstatus=`git status --porcelain|wc -l`
 if [ $gitstatus != 0 ]; then
     die "Error: git working directory not clean. Run 'git status' for unresolved changes."
 fi
+
+## Get git commit
+core_commit=`pkgcommit libopenxpki-perl`
+perl_client_api_commit=`pkgcommit libopenxpki-client-perl`
+deployment_commit=`pkgcommit openxpki-deployment`
+mason_html_client_commit=`pkgcommit libopenxpki-client-html-mason-perl`
+scep_client_commit=`pkgcommit libopenxpki-client-scep-perl`
+i18n_commit=`pkgcommit openxpki-i18n`
+qatest_commit=`pkgcommit openxpki-qatest`
+
+make GITLAZY=$core_commit core && sudo dpkg -i deb/core/libopenxpki-perl*.deb || die "Error building core"
+die "NOT FINISHED!"
+make GITLAZY=$perl_client_api_commit perl-client-api &&
+    make GITLAZY=$deployment_commit deployment &&
+    make GITLAZY=$mason_html_client_commit mason-html-client &&
+    make GITLAZY=$scep_client_commit scep-client &&
+    make GITLAZY=$i18n_commit i18n &&
+    make GITLAZY=$qatest_commit qatest
 
 die "NOT FINISHED!"
 
