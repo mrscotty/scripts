@@ -1,0 +1,210 @@
+#!/usr/bin/make -f
+#
+# oxi-build - Initial proof-of-concept for CIT
+#
+# vim: syntax=Makefile
+#
+# NOTES:
+#
+# - The selecting of the current makefile from MAKEFILE_LIST has NOT
+#   been tested. As soon as "Include" is used, this may break!!!
+# - This is currently hard-coded for SuSE
+# - And also for dca05
+#
+
+OXITOOLS := $(HOME)/git/tools
+
+OXICIT_CODEBASE := $(HOME)/git/code
+OXICIT_CONFBASE := $(HOME)/git/config
+
+SOCKFILE := /var/openxpki/openxpki.socket
+
+RPMBUILD := $(shell rpm --eval '%{_topdir}')
+RPMARCH := x86_64
+
+TOPDIR=$(OXICIT_CODEBASE)
+# Note: this must be an absolute path
+VERGEN=$(TOPDIR)/tools/vergen
+GIT_BRANCH := $(shell (cd $(OXICIT_CONFBASE) && \
+	export PERL_LOCAL_LIB_ROOT= PERL_MB_OPT= PERL_MM_OPT= PERL5LIB= && \
+	. /etc/sysconfig/openxpki && \
+	$(VERGEN) --format GIT_BRANCH))
+TARGET := $(GIT_BRANCH)
+CODE_RPM_VERSION := $(shell (cd $(OXICIT_CODEBASE)/trunk && \
+	export PERL_LOCAL_LIB_ROOT= PERL_MB_OPT= PERL_MM_OPT= PERL5LIB= && \
+	. /etc/sysconfig/openxpki && \
+	$(VERGEN) --format version))
+CODE_RPM_RELEASE := $(shell (cd $(OXICIT_CODEBASE)/trunk && \
+	export PERL_LOCAL_LIB_ROOT= PERL_MB_OPT= PERL_MM_OPT= PERL5LIB= && \
+	. /etc/sysconfig/openxpki && \
+	$(VERGEN) --format PKGREL))
+CONF_RPM_VERSION := $(shell (cd $(OXICIT_CONFBASE) && \
+	export PERL_LOCAL_LIB_ROOT= PERL_MB_OPT= PERL_MM_OPT= PERL5LIB= && \
+	. /etc/sysconfig/openxpki && \
+	$(VERGEN) --format rpm_version))
+CONF_RPM_RELEASE := $(shell (cd $(OXICIT_CONFBASE) && \
+	export PERL_LOCAL_LIB_ROOT= PERL_MB_OPT= PERL_MM_OPT= PERL5LIB= && \
+	. /etc/sysconfig/openxpki && \
+	$(VERGEN) --format rpm_release))
+
+CURRENTMAKEFILE := $(word $(words $(MAKEFILE_LIST)), $(MAKEFILE_LIST))
+MYMAKEFILELOCAL := $(CURRENTMAKEFILE).local
+
+#CODEPACKAGES := perl-openxpki-core perl-openxpki-client perl-openxpki-client-html-mason perl-openxpki-client-html-sc perl-openxpki-client-scep openxpki-deployment openxpki-i18n
+CODEPACKAGES := perl-openxpki-core
+PKG_OXI_CORE := $(OXICIT_CODEBASE)/trunk/package/suse/perl-openxpki-core-$(CODE_RPM_VERSION)-$(CODE_RPM_RELEASE).$(RPMARCH).rpm
+PKG_OXI_CONF_dca05 := $(RPMBUILD)/RPMS/$(RPMARCH)/$(TARGET)-$(CONF_RPM_VERSION)-$(CONF_RPM_RELEASE).$(RPMARCH).rpm
+
+include $(MYMAKEFILELOCAL)
+
+
+.PHONY: help
+help:
+	@echo "oxi-build - initial proof-of-concept for CIT"
+	@echo
+	@echo "Usage:"
+	@echo
+	@echo "	oxi-build TARGET"
+	@echo 
+	@echo "Where TARGET is one of:"
+	@echo
+	@echo " inst     	  Install OpenXPKI, with stop and start of services"
+	@echo " build		  Build code and config packages (does pre-clean)"
+	@echo 
+	@echo "	clean-pkg     Remove previous RPM files from staging directories"
+	@echo "	bld-code      Builds code package(s)"
+	@echo "	bld-conf      Builds config package(s)"
+	@echo " oxi-stop	  Stops OpenXPKI"
+	@echo " oxi-start	  Starts OpenXPKI"
+	@echo " inst-code	  Install OpenXPKI code package(s)"
+	@echo " inst-conf	  Install OpenXPKI conf package(s)"
+
+.PHONY: info
+info:
+	@echo "MAKEFLAGS=$(MAKEFLAGS)"
+	@echo "MAKEFILE_LIST=$(MAKEFILE_LIST)"
+	@echo "MAKEFILES=$(MAKEFILES)"
+	@echo "CURRENTMAKEFILE=$(CURRENTMAKEFILE)"
+	@echo "GIT_BRANCH=$(GIT_BRANCH)"
+	@echo "MYMAKEFILELOCAL=$(MYMAKEFILELOCAL)"
+	@echo "PWD=$(shell pwd)"
+	@echo "CODE_RPM_VERSION=$(CODE_RPM_VERSION)"
+	@echo "CODE_RPM_RELEASE=$(CODE_RPM_RELEASE)"
+	@echo "CONF_RPM_VERSION=$(CONF_RPM_VERSION)"
+	@echo "CONF_RPM_RELEASE=$(CONF_RPM_RELEASE)"
+	@echo "PKG_OXI_CORE=$(PKG_OXI_CORE)"
+	@echo "PKG_OXI_CONF_dca05=$(PKG_OXI_CONF_dca05)"
+
+# TARGETS FOR STATE FILES
+
+code-head.state: pull-code
+	@(cd $(OXICIT_CODEBASE) && test -z "$(shell git status -s | grep -v ^\?\?)")
+	@(cd $(OXICIT_CODEBASE) && git rev-parse HEAD) > $@.new
+	@diff $@ $@.new >/dev/null 2>&1 || mv $@.new $@
+	@rm -f $@.new
+
+conf-head.state: pull-conf
+	@(cd $(OXICIT_CONFBASE) && test -z "$(shell git status -s | grep -v ^\?\?)")
+	@(cd $(OXICIT_CONFBASE) && git rev-parse HEAD) > $@.new
+	@diff $@ $@.new >/dev/null 2>&1 || mv $@.new $@
+	@rm -f $@.new
+
+$(PKG_OXI_CORE): code-head.state
+	(cd $(OXICIT_CODEBASE)/trunk/package/suse && \
+		export PERL_LOCAL_LIB_ROOT= PERL_MB_OPT= PERL_MM_OPT= PERL5LIB= && \
+		. /etc/sysconfig/openxpki && \
+		make clean perl-openxpki-core collect )
+
+$(PKG_OXI_CONF_$(TARGET)): conf-head.state
+	(cd $(OXICIT_CONFBASE) && \
+		export PERL_LOCAL_LIB_ROOT= PERL_MB_OPT= PERL_MM_OPT= PERL5LIB= && \
+		. /etc/sysconfig/openxpki && \
+		make config)
+
+inst-oxi-core.state: $(PKG_OXI_CORE)
+	test -S $(SOCKFILE) && $(MAKE) -f $(CURRENTMAKEFILE) oxi-stop
+	sudo rpm -e perl-openxpki-core
+	(cd $(OXICIT_CODEBASE)/trunk/package/suse && \
+		sudo rpm -Uvh $(PKG_OXI_CORE))
+	touch $@
+
+inst-oxi-conf-$(TARGET).state: $(PKG_OXI_CONF_$(TARGET))
+	test -S $(SOCKFILE) && $(MAKE) -f $(CURRENTMAKEFILE) oxi-stop
+	sudo rpm -e $(TARGET)
+	sudo rpm -Uvh --force $(PKG_OXI_CONF_$(TARGET))
+	touch $@
+
+load-conf.state: inst-oxi-conf-$(TARGET).state
+	echo "( \
+		export PERL_LOCAL_LIB_ROOT= PERL_MB_OPT= PERL_MM_OPT= PERL5LIB= && \
+		. /etc/sysconfig/openxpki && \
+		openxpkictl --config /etc/openxpki/instances/level2/config.xml loadcfg)" | \
+		sudo bash
+	touch $@
+
+# TARGETS FOR COMMAND SETS
+
+.PHONY: pull-code
+pull-code:
+	@(cd $(OXICIT_CODEBASE) && git pull)
+
+.PHONY: pull-conf
+pull-conf:
+	@(cd $(OXICIT_CONFBASE) && git pull)
+
+.PHONY: pull
+pull: pull-code pull-conf
+
+.PHONY: clean-pkg-code
+clean-pkg-code:
+	rm -vf $(OXICIT_CODEBASE)/trunk/package/suse/*.rpm
+
+.PHONY: clean-pkg-conf-$(TARGET)
+clean-pkg-conf-$(TARGET):
+	rm -vf $(RPMBUILD)/RPMS/*/$(TARGET)-*.rpm
+	rm -vf $(RPMBUILD)/SRPMS/$(TARGET)-*.src.rpm
+
+.PHONY: clean-pkg
+clean-pkg: clean-pkg-conf-$(TARGET) clean-pkg-code
+
+.PHONY: bld-code
+bld-code: $(PKG_OXI_CORE)
+
+.PHONY: bld-conf
+bld-conf: $(PKG_OXI_CONF_$(TARGET))
+
+.PHONY: build
+build: bld-code bld-conf
+
+.PHONY: oxi-stop
+oxi-stop:
+	sudo /etc/init.d/openxpki stop
+
+.PHONY: oxi-start
+oxi-start:
+	sudo /etc/init.d/openxpki start
+	sudo chmod o+rw /var/openxpki/openxpki.socket
+
+.PHONY: inst-code
+inst-code: inst-oxi-core.state
+
+.PHONY: load-conf
+load-conf: load-conf.state
+
+.PHONY: inst-conf
+inst-conf: inst-oxi-conf-$(TARGET).state
+
+.PHONY: inst
+inst:
+	@$(MAKE) -f $(CURRENTMAKEFILE) inst-code
+	@$(MAKE) -f $(CURRENTMAKEFILE) inst-conf
+	@$(MAKE) -f $(CURRENTMAKEFILE) load-conf
+	@test -S $(SOCKFILE) || $(MAKE) -f $(CURRENTMAKEFILE) oxi-start
+
+.PHONY: test-core
+test-core:
+	(cd $(OXICIT_CODEBASE)/trunk/perl-modules/core/trunk && \
+		export PERL_LOCAL_LIB_ROOT= PERL_MB_OPT= PERL_MM_OPT= PERL5LIB= && \
+		. /etc/sysconfig/openxpki && \
+		make test)
+
