@@ -122,14 +122,14 @@ $(PKG_OXI_CONF_$(TARGET)): conf-head.state
 		make config)
 
 inst-oxi-core.state: $(PKG_OXI_CORE)
-	test -S $(SOCKFILE) && $(MAKE) -f $(CURRENTMAKEFILE) oxi-stop
+	- test -S $(SOCKFILE) && $(MAKE) -f $(CURRENTMAKEFILE) oxi-stop
 	sudo rpm -e perl-openxpki-core
 	(cd $(OXICIT_CODEBASE)/trunk/package/suse && \
 		sudo rpm -Uvh $(PKG_OXI_CORE))
 	touch $@
 
 inst-oxi-conf-$(TARGET).state: $(PKG_OXI_CONF_$(TARGET))
-	test -S $(SOCKFILE) && $(MAKE) -f $(CURRENTMAKEFILE) oxi-stop
+	- test -S $(SOCKFILE) && $(MAKE) -f $(CURRENTMAKEFILE) oxi-stop
 	sudo rpm -e $(TARGET)
 	sudo rpm -Uvh --force $(PKG_OXI_CONF_$(TARGET))
 	touch $@
