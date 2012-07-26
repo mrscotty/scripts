@@ -182,7 +182,7 @@ oxi-stop:
 
 .PHONY: oxi-start
 oxi-start:
-	sudo /etc/init.d/openxpki start
+	time sudo /etc/init.d/openxpki start
 	sudo chmod o+rw /var/openxpki/openxpki.socket
 
 .PHONY: inst-code
